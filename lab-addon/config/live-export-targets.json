@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "targets": [
+    {
+      "name": "qidian-example",
+      "methods": ["GET", "POST"],
+      "urlIncludes": ["qidian.com", "起点"],
+      "statusCodes": [200]
+    }
+  ]
+}

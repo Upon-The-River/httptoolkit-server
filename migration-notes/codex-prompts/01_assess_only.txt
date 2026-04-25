@@ -1,0 +1,9 @@
+Read README_迁移包说明.md, VALUE_ASSESSMENT.md, MIGRATION_STEPS.md, and MIGRATION_MANIFEST.json.
+
+Task: assess the migration package only. Do not modify official core files.
+
+Return:
+1. high-value files to copy first
+2. files that require import fixes
+3. routes that should move from rest-api.ts to lab-addon/src/server.ts
+4. patches that must not be applied blindly

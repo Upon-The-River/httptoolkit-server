@@ -1,0 +1,1060 @@
+--- /mnt/data/htk34/httptoolkit-server-main/src/api/rest-api.ts	2026-04-24 16:49:31.000000000 +0000
++++ /mnt/data/htk33/httptoolkit-server-main/src/api/rest-api.ts	2026-04-25 12:04:56.000000000 +0000
+@@ -10,11 +10,39 @@
+     RouteParameters
+ } from 'express-serve-static-core';
+ import type { ParsedQs } from 'qs';
+-import { ErrorLike, StatusError } from '@httptoolkit/util';
++import { delay, ErrorLike, StatusError } from '@httptoolkit/util';
+ 
+ import { logError } from '../error-tracking';
+ import { ApiModel } from './api-model';
+ import * as Client from '../client/client-types';
++import { LiveResponseExporter } from '../export/live-exporter';
++import { ObservedTrafficSignal, SessionManager, TargetTrafficSignal } from '../automation/session-manager';
++import { HeadlessHealthStore, isTcpPortReachable } from '../automation/headless-health';
++import {
++    createAdbClient,
++    getConnectedDevices,
++    inspectAndroidVpnState,
++    runStatelessAndroidCleanup
++} from '../interceptors/android/adb-commands';
++import {
++    captureAndroidNetworkBaseline,
++    saveAndroidNetworkBaseline,
++    inspectAndroidNetworkSafety,
++    loadAndroidNetworkBaseline,
++    rescueAndroidNetwork,
++    restoreAndroidNetworkBaseline
++} from '../interceptors/android/android-network-safety';
++
++interface SessionController {
++    startSessionIfNeeded: SessionManager['startSessionIfNeeded'];
++    getLatestSession: SessionManager['getLatestSession'];
++    stopLatestSession: SessionManager['stopLatestSession'];
++    ensureAndroidBootstrapRules?: SessionManager['ensureAndroidBootstrapRules'];
++    ensurePassThroughFallbackRule?: SessionManager['ensurePassThroughFallbackRule'];
++    getObservedTrafficSignal?: SessionManager['getObservedTrafficSignal'];
++    getTargetTrafficSignal?: SessionManager['getTargetTrafficSignal'];
++    clearLatestSession?: SessionManager['clearLatestSession'];
++}
+ 
+ /**
+  * This file exposes the API model via a REST-ish classic HTTP API.
+@@ -25,8 +53,600 @@
+ 
+ export function exposeRestAPI(
+     server: ExpressApp,
+-    apiModel: ApiModel
++    apiModel: ApiModel,
++    liveExporter?: LiveResponseExporter,
++    getLatestActiveProxyPort: () => number | undefined = () => undefined,
++    sessionManager: SessionController = new SessionManager(),
++    overrides: {
++        runCleanup?: typeof runStatelessAndroidCleanup,
++        checkPort?: typeof isTcpPortReachable,
++        listAdbDevices?: () => Promise<Array<{ id: string, type: string }>>,
++        inspectVpnState?: typeof inspectAndroidVpnState,
++        inspectNetworkSafety?: typeof inspectAndroidNetworkSafety,
++        restoreNetworkBaseline?: typeof restoreAndroidNetworkBaseline,
++        rescueNetwork?: typeof rescueAndroidNetwork,
++        captureNetworkBaseline?: typeof captureAndroidNetworkBaseline,
++        loadNetworkBaseline?: typeof loadAndroidNetworkBaseline
++    } = {}
+ ) {
++    const healthStore = new HeadlessHealthStore();
++    const adbClient = createAdbClient();
++    let headlessProfile: {
++        deviceId: string;
++        enableSocks: boolean;
++        targetRules?: unknown;
++        startedAt: string;
++        lastProxyPort: number;
++    } | undefined;
++    let recoveryInProgress = false;
++    let consecutiveRecoveryFailures = 0;
++    let lastRecoveryAt: string | undefined;
++    let nextRecoveryAllowedAt: string | undefined;
++    const RECOVERY_FAILURE_ERROR_THRESHOLD = 3;
++    const RECOVERY_BACKOFF_BASE_MS = 5000;
++    const RECOVERY_BACKOFF_MAX_MS = 60000;
++    const maxRecoveryFailures = RECOVERY_FAILURE_ERROR_THRESHOLD;
++
++    const recordRecoveryFailure = async (reason: string, extra: Record<string, unknown> = {}) => {
++        consecutiveRecoveryFailures += 1;
++        lastRecoveryAt = new Date().toISOString();
++        const backoffMs = Math.min(RECOVERY_BACKOFF_MAX_MS, Math.max(1, consecutiveRecoveryFailures) * RECOVERY_BACKOFF_BASE_MS);
++        nextRecoveryAllowedAt = new Date(Date.now() + backoffMs).toISOString();
++        const state = consecutiveRecoveryFailures >= RECOVERY_FAILURE_ERROR_THRESHOLD
++            ? 'ERROR'
++            : 'DEGRADED';
++
++        await healthStore.patch({
++            state,
++            lastError: reason,
++            consecutiveRecoveryFailures,
++            nextRecoveryAllowedAt,
++            lastRecoveryAt,
++            ...extra
++        });
++
++        return {
++            consecutiveRecoveryFailures,
++            nextRecoveryAllowedAt,
++            backoffMs,
++            state
++        };
++    };
++
++    const resetRecoveryFailureTracking = async () => {
++        consecutiveRecoveryFailures = 0;
++        nextRecoveryAllowedAt = undefined;
++        lastRecoveryAt = new Date().toISOString();
++
++        await healthStore.patch({
++            state: 'RUNNING',
++            consecutiveRecoveryFailures: 0,
++            nextRecoveryAllowedAt: undefined,
++            lastError: undefined,
++            lastRecoveryAt
++        });
++    };
++
++    const refreshHealthSnapshot = async () => {
++        const latestSession = sessionManager.getLatestSession();
++        const proxyPort = latestSession.proxyPort;
++        let adbList: Array<{ id: string, type: string }> = [];
++        let adbError: string | undefined;
++        try {
++            adbList = overrides.listAdbDevices
++                ? await overrides.listAdbDevices()
++                : await adbClient.listDevices() as Array<{ id: string, type: string }>;
++        } catch (error) {
++            adbList = [];
++            adbError = error instanceof Error ? error.message : String(error);
++        }
++        const adbDevices = adbList.map((d) => d.id);
++        const skippedDevices = adbList
++            .filter((d) => d.type !== 'device')
++            .map((d) => ({ deviceId: d.id, adbState: d.type, reason: d.type }));
++        const checkPort = overrides.checkPort ?? isTcpPortReachable;
++        const mockttpAdminReachable = await checkPort(45456);
++        const proxyReachable = proxyPort ? await checkPort(proxyPort) : false;
++        const onlineDevices = adbList.filter((d) => d.type === 'device');
++        const androidInspections = await Promise.all(onlineDevices.map(async (device) => {
++            const inspection = await (overrides.inspectVpnState ?? inspectAndroidVpnState)(adbClient, device.id);
++            const networkSafety = await (overrides.inspectNetworkSafety ?? inspectAndroidNetworkSafety)(device.id, {
++                adbClient,
++                proxyReachable
++            });
++            return { inspection, networkSafety };
++        }));
++        const androidDevices = androidInspections.map(({ inspection }, i) => ({
++            deviceId: onlineDevices[i].id,
++            adbState: 'device' as const,
++            vpnActive: inspection.vpnActive,
++            vpnPackage: inspection.vpnPackage,
++            lastHtkState: inspection.lastHtkState,
++            proxyReachable,
++            errors: inspection.errors
++        }));
++        const networkSafetyDevices = androidInspections.map(({ networkSafety }) => networkSafety);
++        const activeButProxyDead = androidDevices.some((d) => d.vpnActive && !d.proxyReachable);
++        let androidVpnState: string = 'unknown';
++        if (adbError) androidVpnState = 'error';
++        else if (adbList.length === 0) androidVpnState = 'no-device';
++        else if (activeButProxyDead) androidVpnState = 'active-but-proxy-dead';
++        else if (androidDevices.some((d) => d.vpnActive)) androidVpnState = 'active';
++        else if (androidDevices.length > 0) androidVpnState = 'inactive';
++
++        await healthStore.patch({
++            nodePath: process.execPath,
++            nodeVersion: process.version,
++            expectedNodeVersion: 'v22.20.0',
++            mockttpAdminReachable,
++            latestSessionActive: !!latestSession.active,
++            proxyPort,
++            adbDevices,
++            skippedDevices,
++            androidDevices,
++            androidVpnState,
++            networkSafety: {
++                ...(healthStore.get().networkSafety ?? { devices: [] }),
++                devices: networkSafetyDevices
++            },
++            ...(adbError ? { lastError: adbError } : {})
++        });
++    };
++
++    const networkRiskPollutionStates = new Set([
++        'proxy-residual',
++        'private-dns-risk',
++        'vpn-lockdown-risk',
++        'vpn-active-proxy-dead',
++        'dns-broken',
++        'route-broken',
++        'partial-connectivity',
++        'http-broken'
++    ]);
++
++    const runStopHeadless = async (options: { aggressive?: boolean, restoreUnsafeBaseline?: boolean, deviceId?: string } = {}) => {
++        const aggressive = options.aggressive ?? false;
++        await healthStore.patch({ state: 'CLEANING' });
++        const cleanupResult = await (overrides.runCleanup ?? runStatelessAndroidCleanup)({ aggressive });
++        const onlineCleanupDevices = cleanupResult.devices
++            .filter((d) => d.adbState === 'device');
++        const selectedCleanupDevices = options.deviceId
++            ? onlineCleanupDevices.filter((d) => d.deviceId === options.deviceId)
++            : onlineCleanupDevices;
++        const onlineCleanupTargetCount = selectedCleanupDevices.length;
++        const cleanedDeviceCount = onlineCleanupTargetCount;
++        const adbUnavailable = cleanupResult.adbAvailable === false;
++        const cleanupReportedNoDevices = cleanupResult.deviceCount === 0 || cleanupResult.devices.length === 0;
++        const noOnlineCleanupTarget = adbUnavailable || cleanupReportedNoDevices || onlineCleanupTargetCount === 0;
++        const stopError = options.deviceId && onlineCleanupTargetCount === 0
++            ? 'no-online-target-device'
++            : (noOnlineCleanupTarget ? 'no-online-cleanup-target' : undefined);
++        const restoreResults = await Promise.all(selectedCleanupDevices
++            .map(async (d) => {
++                const baseline = await (overrides.loadNetworkBaseline ?? loadAndroidNetworkBaseline)(d.deviceId);
++                return (overrides.restoreNetworkBaseline ?? restoreAndroidNetworkBaseline)(d.deviceId, baseline, {
++                    adbClient,
++                    restoreUnsafeBaseline: options.restoreUnsafeBaseline
++                });
++            }));
++        const sessionStopResult = await sessionManager.stopLatestSession();
++        sessionManager.clearLatestSession?.();
++        const vpnResidualExists = selectedCleanupDevices.some((d) => d.vpnActiveAfter);
++        const cleanupOverallSuccess = cleanupResult.success ?? cleanupResult.overallSuccess;
++        const selectedVpnCleanupSucceeded = selectedCleanupDevices.length > 0 && selectedCleanupDevices.every((d) => d.vpnCleanupSucceeded);
++        const selectedReverseCleanupSucceeded = selectedCleanupDevices.length > 0 && selectedCleanupDevices.every((d) => d.reverseCleanupSucceeded);
++        const vpnCleanupSucceeded = !noOnlineCleanupTarget && selectedVpnCleanupSucceeded && !vpnResidualExists;
++        const reverseCleanupSucceeded = !noOnlineCleanupTarget && selectedReverseCleanupSucceeded;
++        const networkRestoreSucceeded = !noOnlineCleanupTarget &&
++            restoreResults.length === cleanedDeviceCount &&
++            restoreResults.every((r) => r.success);
++        const safetyAfterRestore = await Promise.all(selectedCleanupDevices
++            .map((d) => (overrides.inspectNetworkSafety ?? inspectAndroidNetworkSafety)(d.deviceId, {
++                adbClient,
++                proxyReachable: false
++            })));
++        const checkedNetworkSafetyDeviceCount = safetyAfterRestore.length;
++        const hasRiskPollution = safetyAfterRestore.some((s) => networkRiskPollutionStates.has(s.pollutionState));
++        const safetyInspectedAllSelected = !noOnlineCleanupTarget && checkedNetworkSafetyDeviceCount === cleanedDeviceCount;
++        const safetyStatesSafe = safetyInspectedAllSelected && safetyAfterRestore.every((s) =>
++            s.pollutionState === 'clean' || s.pollutionState === 'unknown-safe'
++        );
++        const networkRiskCleared = !noOnlineCleanupTarget &&
++            !vpnResidualExists &&
++            networkRestoreSucceeded &&
++            !hasRiskPollution &&
++            safetyStatesSafe;
++        const success = vpnCleanupSucceeded && networkRestoreSucceeded && networkRiskCleared && !vpnResidualExists && !hasRiskPollution && !!cleanupOverallSuccess;
++
++        const cleanupHadVpnResidual = vpnResidualExists;
++        const degradedState = cleanupHadVpnResidual || !success || !networkRiskCleared || noOnlineCleanupTarget;
++        const cleanupUnverified = noOnlineCleanupTarget;
++        const warnings: string[] = [];
++        if (stopError === 'no-online-cleanup-target') {
++            warnings.push('no-device-cleaned');
++        }
++        if (adbUnavailable) {
++            warnings.push('adb-unavailable-network-state-unverified');
++        }
++        if (!reverseCleanupSucceeded && networkRiskCleared) {
++            warnings.push('reverse cleanup failed but phone network risk cleared');
++        }
++        const reverseOnlyFailures = selectedCleanupDevices
++            .filter((d) => d.vpnCleanupSucceeded && !d.reverseCleanupSucceeded && !d.vpnActiveAfter)
++            .map((d) => d.deviceId);
++        const cleanupError = reverseOnlyFailures.length
++            ? `vpn-network-risk-cleared-reverse-cleanup-failed:${reverseOnlyFailures.join(',')}`
++            : (stopError ?? cleanupResult.errors.join('; '));
++        await healthStore.patch({
++            state: stopError ? 'ERROR' : (degradedState ? 'DEGRADED' : 'IDLE'),
++            latestSessionActive: false,
++            proxyPort: undefined,
++            lastCleanupResult: cleanupResult,
++            lastCleanupAt: new Date().toISOString(),
++            lastCleanupHadNoOnlineTarget: noOnlineCleanupTarget,
++            lastCleanupHadVpnResidual: cleanupHadVpnResidual,
++            lastCleanupHadNetworkResidual: !networkRiskCleared,
++            lastCleanupUnverified: cleanupUnverified,
++            lastNetworkRestoreResult: restoreResults,
++            lastNetworkSafetyStatus: safetyAfterRestore,
++            lastNetworkRiskCleared: networkRiskCleared,
++            lastError: stopError ?? (cleanupOverallSuccess ? undefined : cleanupError),
++            networkSafety: {
++                ...(healthStore.get().networkSafety ?? { devices: [] }),
++                devices: safetyAfterRestore,
++                lastRestoreAt: new Date().toISOString()
++            },
++            skippedDevices: cleanupResult.skippedDevices.map((d) => ({
++                deviceId: d.deviceId,
++                adbState: d.reason,
++                reason: d.reason
++            })),
++            androidDevices: cleanupResult.devices.map((d) => ({
++                deviceId: d.deviceId,
++                adbState: (d.adbState.startsWith('no permissions') ? 'no permissions' : d.adbState) as any,
++                vpnActive: d.vpnActiveAfter,
++                vpnPackage: d.vpnActiveAfter ? 'tech.httptoolkit.android.v1' : null,
++                lastHtkState: d.vpnActiveAfter ? 'vpn-active' : 'vpn-inactive',
++                proxyReachable: false,
++                errors: d.errors
++            }))
++        });
++        await refreshHealthSnapshot();
++
++        return {
++            success: !!success,
++            stopSuccess: !!cleanupOverallSuccess,
++            networkRiskCleared,
++            error: stopError,
++            onlineCleanupTargetCount,
++            checkedNetworkSafetyDeviceCount,
++            vpnCleanupSucceeded,
++            reverseCleanupSucceeded,
++            networkRestoreSucceeded,
++            cleanedDeviceCount,
++            warnings,
++            restoreResults,
++            safetyAfterRestore,
++            cleanupResult,
++            sessionStopResult
++        };
++    };
++
++    const runRecoverHeadless = async (reqBody: any = {}) => {
++        if (recoveryInProgress) {
++            const error = 'recover-already-running';
++            const failure = await recordRecoveryFailure(error);
++            return { success: false, error, ...failure };
++        }
++        const selectedDeviceId = reqBody.deviceId ?? headlessProfile?.deviceId;
++        if (!selectedDeviceId) {
++            const error = 'recover-headless requires deviceId when no previously-started profile exists';
++            const failure = await recordRecoveryFailure(error);
++            return {
++                success: false,
++                error,
++                ...failure
++            };
++        }
++
++        recoveryInProgress = true;
++        await healthStore.incrementRecoveryCount();
++        await healthStore.patch({
++            state: 'RECOVERING',
++            recoveryInProgress: true
++        });
++
++        try {
++            const stopResult = await runStopHeadless({ aggressive: true });
++            if (!stopResult.success && !stopResult.networkRiskCleared) {
++                const error = 'recover-headless aborted: stop-headless did not clear network risk';
++                const failure = await recordRecoveryFailure(error, {
++                    networkRiskCleared: false
++                });
++                return {
++                    success: false,
++                    error,
++                    networkRiskCleared: false,
++                    stopHeadlessResult: stopResult,
++                    ...failure
++                };
++            }
++
++            const session = await sessionManager.startSessionIfNeeded();
++            await sessionManager.ensureAndroidBootstrapRules?.((await apiModel.getConfig(session.proxyPort)).certificateContent);
++            await sessionManager.ensurePassThroughFallbackRule?.();
++
++            const fakeReq = {
++                body: {
++                    deviceId: selectedDeviceId,
++                    enableSocks: reqBody.enableSocks ?? headlessProfile?.enableSocks ?? false
++                }
++            } as Request;
++            const fakeRes = {
++                status: () => fakeRes,
++                send: () => fakeRes
++            } as unknown as Response;
++            const activation = await activateAndroidAdbForPort(
++                fakeReq,
++                fakeRes,
++                apiModel,
++                session.proxyPort,
++                sessionManager
++            );
++            if (!activation?.success) {
++                const error = 'recover-headless activation failed';
++                const failure = await recordRecoveryFailure(error);
++                return {
++                    success: false,
++                    error,
++                    stopHeadlessResult: stopResult,
++                    startHeadlessResult: activation,
++                    ...failure
++                };
++            }
++
++            const targetTraffic = await sessionManager.getTargetTrafficSignal?.({
++                waitMs: 15000,
++                pollIntervalMs: 500
++            });
++
++            const success = !!targetTraffic?.observed;
++            if (!success) {
++                const error = 'recover-headless did not observe target business traffic';
++                const failure = await recordRecoveryFailure(error);
++                await healthStore.patch({
++                    latestSessionActive: true,
++                    proxyPort: session.proxyPort
++                });
++                await refreshHealthSnapshot();
++                return {
++                    success: false,
++                    error,
++                    stopHeadlessResult: stopResult,
++                    startHeadlessResult: activation,
++                    targetTraffic,
++                    targetTrafficObserved: false,
++                    ...failure
++                };
++            }
++
++            await healthStore.patch({
++                latestSessionActive: true,
++                proxyPort: session.proxyPort,
++                lastObservedTrafficAt: new Date().toISOString(),
++                lastTargetHitAt: new Date().toISOString()
++            });
++            await resetRecoveryFailureTracking();
++            await refreshHealthSnapshot();
++
++            return {
++                success: true,
++                stopHeadlessResult: stopResult,
++                startHeadlessResult: activation,
++                session,
++                targetTraffic,
++                targetTrafficObserved: true,
++                consecutiveRecoveryFailures,
++                nextRecoveryAllowedAt
++            };
++        } catch (error) {
++            const message = error instanceof Error ? error.message : String(error);
++            await recordRecoveryFailure(message);
++            if (error && typeof error === 'object') {
++                (error as any).recoveryFailureRecorded = true;
++            }
++            throw error;
++        } finally {
++            recoveryInProgress = false;
++            await healthStore.patch({
++                recoveryInProgress: false,
++                consecutiveRecoveryFailures,
++                lastRecoveryAt,
++                nextRecoveryAllowedAt
++            });
++        }
++    };
++
++    const runRescueNetwork = async (requestedDeviceId?: string) => {
++        let devices: Array<{ id: string, type: string }> = [];
++        try {
++            devices = overrides.listAdbDevices
++                ? await overrides.listAdbDevices()
++                : await adbClient.listDevices() as Array<{ id: string, type: string }>;
++        } catch (error) {
++            return {
++                success: false,
++                error: `failed-to-list-devices:${error instanceof Error ? error.message : String(error)}`,
++                results: []
++            };
++        }
++        const onlineDevices = devices.filter((d) => d.type === 'device');
++        const selectedDevices = requestedDeviceId
++            ? onlineDevices.filter((d) => d.id === requestedDeviceId)
++            : onlineDevices;
++        const skippedDevices = devices
++            .filter((d) => d.type !== 'device')
++            .map((d) => ({ deviceId: d.id, reason: d.type }));
++        if (requestedDeviceId && selectedDevices.length === 0) {
++            const result = {
++                success: false,
++                networkRiskCleared: false,
++                error: 'no-online-target-device',
++                requestedDeviceId,
++                onlineDeviceCount: onlineDevices.length,
++                selectedDeviceCount: 0,
++                skippedDevices,
++                results: []
++            };
++            await healthStore.patch({
++                state: 'ERROR',
++                networkSafety: {
++                    ...(healthStore.get().networkSafety ?? { devices: [] }),
++                    lastRescueAt: new Date().toISOString(),
++                    lastRescueResult: result
++                }
++            });
++            return result;
++        }
++        if (!requestedDeviceId && onlineDevices.length === 0) {
++            const result = {
++                success: false,
++                networkRiskCleared: false,
++                error: 'no-online-adb-devices',
++                requestedDeviceId,
++                onlineDeviceCount: 0,
++                selectedDeviceCount: 0,
++                skippedDevices,
++                results: []
++            };
++            await healthStore.patch({
++                state: 'ERROR',
++                networkSafety: {
++                    ...(healthStore.get().networkSafety ?? { devices: [] }),
++                    lastRescueAt: new Date().toISOString(),
++                    lastRescueResult: result
++                }
++            });
++            return result;
++        }
++        const results = await Promise.all(selectedDevices.map(async (d) =>
++            (overrides.rescueNetwork ?? rescueAndroidNetwork)(d.id, { adbClient })
++        ));
++        const success = results.length > 0 && results.every((r) => r.success);
++        const networkRiskCleared = results.length > 0 && results.every((r) => r.networkRiskCleared);
++        const rescueSummary = {
++            success,
++            networkRiskCleared,
++            requestedDeviceId,
++            onlineDeviceCount: onlineDevices.length,
++            selectedDeviceCount: selectedDevices.length,
++            skippedDevices,
++            results
++        };
++        await healthStore.patch({
++            state: success ? 'DEGRADED' : 'ERROR',
++            networkSafety: {
++                ...(healthStore.get().networkSafety ?? { devices: [] }),
++                lastRescueAt: new Date().toISOString(),
++                lastRescueResult: rescueSummary
++            }
++        });
++        return rescueSummary;
++    };
++
++    const watchdog = setInterval(async () => {
++        try {
++            await refreshHealthSnapshot();
++            const latest = sessionManager.getLatestSession();
++            const health = healthStore.get();
++            const proxyReachable = !!(health.proxyPort && await (overrides.checkPort ?? isTcpPortReachable)(health.proxyPort));
++            const shouldSafetyCleanup = (
++                health.androidVpnState === 'active-but-proxy-dead' ||
++                health.androidDevices.some((d) => d.vpnActive && !health.latestSessionActive) ||
++                health.androidDevices.some((d) => d.vpnActive && !proxyReachable) ||
++                (health.networkSafety?.devices ?? []).some((d) => [
++                    'proxy-residual',
++                    'private-dns-risk',
++                    'vpn-lockdown-risk',
++                    'vpn-active-proxy-dead',
++                    'dns-broken',
++                    'route-broken',
++                    'http-broken',
++                    'partial-connectivity'
++                ].includes(d.pollutionState))
++            );
++            if (shouldSafetyCleanup) {
++                const recoveryAllowed = !nextRecoveryAllowedAt || Date.now() >= Date.parse(nextRecoveryAllowedAt);
++                if (!recoveryAllowed) return;
++                await runStopHeadless({ aggressive: true });
++                const rescueResult = await runRescueNetwork();
++                await refreshHealthSnapshot();
++                const postCleanup = healthStore.get();
++                if (postCleanup.androidDevices.some((d) => d.vpnActive) || rescueResult.success === false) {
++                    consecutiveRecoveryFailures += 1;
++                    nextRecoveryAllowedAt = new Date(Date.now() + Math.min(120000, consecutiveRecoveryFailures * 15000)).toISOString();
++                    await healthStore.patch({
++                        state: consecutiveRecoveryFailures >= maxRecoveryFailures ? 'ERROR' : 'DEGRADED',
++                        lastError: 'network-risk-residual-after-rescue',
++                        consecutiveRecoveryFailures,
++                        lastRecoveryAt: new Date().toISOString(),
++                        nextRecoveryAllowedAt
++                    });
++                } else {
++                    consecutiveRecoveryFailures = 0;
++                    nextRecoveryAllowedAt = undefined;
++                    await healthStore.patch({
++                        state: 'DEGRADED',
++                        lastError: 'safety-cleanup-completed',
++                        consecutiveRecoveryFailures: 0,
++                        nextRecoveryAllowedAt: undefined
++                    });
++                }
++                return;
++            }
++
++            const needsRecovery = latest.active && (!health.mockttpAdminReachable || !proxyReachable || health.adbDevices.length === 0);
++            const recoveryAllowed = !nextRecoveryAllowedAt || Date.now() >= Date.parse(nextRecoveryAllowedAt);
++            if (needsRecovery && !recoveryInProgress && recoveryAllowed && consecutiveRecoveryFailures < maxRecoveryFailures) {
++                lastRecoveryAt = new Date().toISOString();
++                const recoverResult: { success: boolean, error?: string } = await runRecoverHeadless();
++                if (recoverResult.success === true) {
++                    consecutiveRecoveryFailures = 0;
++                    nextRecoveryAllowedAt = undefined;
++                    await healthStore.patch({
++                        state: 'RUNNING',
++                        lastError: undefined,
++                        consecutiveRecoveryFailures: 0,
++                        nextRecoveryAllowedAt: undefined
++                    });
++                } else {
++                    await healthStore.patch({
++                        lastError: recoverResult.error ?? 'watchdog recovery returned success=false',
++                        consecutiveRecoveryFailures,
++                        nextRecoveryAllowedAt
++                    });
++                }
++            } else if (needsRecovery && (!recoveryAllowed || consecutiveRecoveryFailures >= maxRecoveryFailures)) {
++                await healthStore.patch({
++                    state: consecutiveRecoveryFailures >= maxRecoveryFailures ? 'ERROR' : 'DEGRADED',
++                    lastError: recoveryAllowed
++                        ? 'recovery-disabled-after-consecutive-failures'
++                        : `recovery-backoff-until-${nextRecoveryAllowedAt}`,
++                    consecutiveRecoveryFailures,
++                    lastRecoveryAt,
++                    nextRecoveryAllowedAt
++                });
++            }
++        } catch (error) {
++            const message = error instanceof Error ? error.message : String(error);
++            if (!(error && typeof error === 'object' && (error as any).recoveryFailureRecorded)) {
++                await recordRecoveryFailure(message);
++            }
++            await healthStore.markError(error);
++        }
++    }, 3000);
++    watchdog.unref();
++
+     server.get('/version', handleErrors((_req, res) => {
+         res.send({ version: apiModel.getVersion() });
+     }));
+@@ -95,6 +715,214 @@
+         res.json({ result });
+     }));
+ 
++    server.post('/automation/android-adb/activate-latest', handleErrors(async (req, res) => {
++        const latestActiveProxyPort = getLatestActiveProxyPort();
++        if (!latestActiveProxyPort) {
++            res.status(409).send({
++                success: false,
++                error: { message: 'No active mock session found, so there is no proxy port to activate' }
++            });
++            return;
++        }
++
++        const activation = await activateAndroidAdbForPort(req, res, apiModel, latestActiveProxyPort);
++        if (!activation) return;
++
++        res.send(activation);
++    }));
++
++    server.post('/automation/session/start', handleErrors(async (_req, res) => {
++        const session = await sessionManager.startSessionIfNeeded();
++        res.send({
++            success: true,
++            ...session
++        });
++    }));
++
++    server.get('/automation/session/latest', handleErrors(async (_req, res) => {
++        res.send({
++            success: true,
++            session: sessionManager.getLatestSession()
++        });
++    }));
++
++    server.post('/automation/session/stop-latest', handleErrors(async (_req, res) => {
++        const stopResult = await runStopHeadless({
++            aggressive: false,
++            restoreUnsafeBaseline: !!_req.body?.restoreUnsafeBaseline,
++            deviceId: _req.body?.deviceId
++        });
++        res.send({
++            ...stopResult,
++            success: stopResult.success,
++            session: sessionManager.getLatestSession()
++        });
++    }));
++
++    server.post('/automation/android-adb/start-headless', handleErrors(async (req, res) => {
++        let session: Awaited<ReturnType<SessionController['startSessionIfNeeded']>> | undefined;
++        const metadata = await apiModel.getInterceptorMetadata('android-adb', 'detailed') as { deviceIds?: string[] } | undefined;
++        const selectedDeviceId = req.body?.deviceId ?? (metadata?.deviceIds?.length === 1 ? metadata.deviceIds[0] : undefined);
++        if (selectedDeviceId) {
++            try {
++                const baseline = await (overrides.captureNetworkBaseline ?? captureAndroidNetworkBaseline)(selectedDeviceId, { adbClient });
++                const baselineSafety = await (overrides.inspectNetworkSafety ?? inspectAndroidNetworkSafety)(selectedDeviceId, {
++                    adbClient,
++                    proxyReachable: false
++                });
++                const baselineTrusted = baselineSafety.pollutionState === 'clean' || baselineSafety.pollutionState === 'unknown-safe';
++                await saveAndroidNetworkBaseline({
++                    ...baseline,
++                    capturedAt: baseline.capturedAt ?? new Date().toISOString(),
++                    baselinePollutionState: baselineSafety.pollutionState,
++                    baselineTrusted
++                });
++                if (!baselineTrusted && !req.body?.allowUnsafeStart) {
++                    if (session?.created) {
++                        await sessionManager.stopLatestSession();
++                    }
++                    await healthStore.patch({
++                        state: 'DEGRADED',
++                        latestSessionActive: false,
++                        networkSafety: {
++                            ...(healthStore.get().networkSafety ?? { devices: [] }),
++                            baselinePollutionState: baselineSafety.pollutionState,
++                            baselineTrusted: false
++                        }
++                    });
++                    res.status(409).send({
++                        success: false,
++                        error: 'network-baseline-polluted',
++                        baselineTrusted: false,
++                        pollutionState: baselineSafety.pollutionState
++                    });
++                    return;
++                }
++                await healthStore.patch({
++                    networkSafety: {
++                        ...(healthStore.get().networkSafety ?? { devices: [] }),
++                        lastBaselineAt: new Date().toISOString(),
++                        baselinePollutionState: baselineSafety.pollutionState,
++                        baselineTrusted,
++                        ...(baselineTrusted ? {} : { warning: 'starting from polluted network baseline' })
++                    }
++                });
++            } catch (error) {
++                if (!req.body?.allowUnsafeStart) {
++                    res.status(409).send({
++                        success: false,
++                        error: {
++                            message: `Failed to capture Android network baseline: ${error instanceof Error ? error.message : String(error)}`
++                        }
++                    });
++                    return;
++                }
++            }
++        }
++
++        session = await sessionManager.startSessionIfNeeded();
++        await sessionManager.ensureAndroidBootstrapRules?.((await apiModel.getConfig(session.proxyPort)).certificateContent);
++        await sessionManager.ensurePassThroughFallbackRule?.();
++
++        let activation = await activateAndroidAdbForPort(req, res, apiModel, session.proxyPort, sessionManager);
++
++        if (
++            activation &&
++            !activation.success &&
++            shouldRetryAndroidActivation(activation.activationResult)
++        ) {
++            // The VPN state signal can lag behind startup transiently on some devices.
++            // Retry once after a brief delay to avoid requiring users to manually rerun.
++            await delay(250);
++            activation = await activateAndroidAdbForPort(req, res, apiModel, session.proxyPort, sessionManager);
++        }
++
++        if (!activation) {
++            if (session?.created) {
++                await sessionManager.stopLatestSession();
++                await healthStore.patch({ latestSessionActive: false });
++            }
++            return;
++        }
++        const { success, ...activationDetails } = activation;
++        const metadataObservedTraffic = activationDetails.activationResult?.metadata?.observedTraffic as ObservedTrafficSignal | undefined;
++        const observedTraffic = metadataObservedTraffic ?? await sessionManager.getObservedTrafficSignal?.({
++            waitMs: 4000,
++            pollIntervalMs: 500
++        }) as ObservedTrafficSignal | undefined;
++        const targetTraffic = await sessionManager.getTargetTrafficSignal?.({ waitMs: 8000, pollIntervalMs: 500 }) as TargetTrafficSignal | undefined;
++        const dataPlaneObserved = !!observedTraffic?.observed && observedTraffic?.bootstrapOnly !== true;
++        const targetTrafficObserved = !!targetTraffic?.observed;
++        const trafficValidated = dataPlaneObserved || targetTrafficObserved;
++        const controlPlaneSuccess = success;
++        const finalSuccess = controlPlaneSuccess;
++
++        if (!finalSuccess && session?.created) {
++            await sessionManager.stopLatestSession();
++        }
++
++        await healthStore.patch({
++            state: finalSuccess ? 'RUNNING' : 'ERROR',
++            latestSessionActive: finalSuccess,
++            proxyPort: finalSuccess ? session.proxyPort : undefined,
++            lastObservedTrafficAt: dataPlaneObserved ? new Date().toISOString() : undefined,
++            lastTargetHitAt: targetTrafficObserved ? new Date().toISOString() : undefined,
++            lastError: finalSuccess ? undefined : 'start-headless activation failed'
++        });
++        await refreshHealthSnapshot();
++        if (success) {
++            headlessProfile = {
++                deviceId: activationDetails.deviceId,
++                enableSocks: !!req.body?.enableSocks,
++                targetRules: req.body?.targetRules,
++                startedAt: new Date().toISOString(),
++                lastProxyPort: session.proxyPort
++            };
++        }
++
++        res.send({
++            success: finalSuccess,
++            session,
++            controlPlaneSuccess,
++            dataPlaneObserved,
++            targetTrafficObserved,
++            finalSuccess,
++            trafficValidated,
++            message: controlPlaneSuccess && !trafficValidated
++                ? 'control plane ready; waiting for target traffic validation'
++                : undefined,
++            ...activationDetails
++        });
++    }));
++
++    server.post('/automation/android-adb/stop-headless', handleErrors(async (req, res) => {
++        const aggressive = !!req.body?.aggressive;
++        const result = await runStopHeadless({
++            aggressive,
++            restoreUnsafeBaseline: !!req.body?.restoreUnsafeBaseline,
++            deviceId: req.body?.deviceId
++        });
++        res.send(result);
++    }));
++
++    server.post('/automation/android-adb/recover-headless', handleErrors(async (req, res) => {
++        const result = await runRecoverHeadless(req.body ?? {});
++        res.send(result);
++    }));
++
++    server.post('/automation/android-adb/rescue-network', handleErrors(async (req, res) => {
++        const result = await runRescueNetwork(req.body?.deviceId);
++        res.send(result);
++    }));
++
++    server.get('/automation/health', handleErrors(async (_req, res) => {
++        await refreshHealthSnapshot();
++        res.send({
++            success: true,
++            ...healthStore.get()
++        });
++    }));
++
+     server.post('/client/send', handleErrors(async (req, res) => {
+         const bodyData = req.body;
+         if (!bodyData) throw new StatusError(400, "No request definition or options provided");
+@@ -155,6 +983,183 @@
+             res.end();
+         });
+     }));
++
++    server.get('/export/stream', handleErrors(async (_req, res) => {
++        if (!liveExporter) {
++            throw new StatusError(503, 'Live export is not enabled');
++        }
++
++        res.writeHead(200, {
++            'content-type': 'application/x-ndjson',
++            'cache-control': 'no-cache',
++            connection: 'keep-alive'
++        });
++
++        // Keep stream responses active through idle periods, to avoid intermediaries closing
++        // long-running requests with no data while we're waiting for matching traffic.
++        res.setTimeout(0);
++        const heartbeatTimer = setInterval(() => {
++            if (!res.writableEnded) {
++                res.write('\n');
++            }
++        }, 15000);
++        heartbeatTimer.unref();
++
++        const unsubscribe = liveExporter.subscribe((hit) => {
++            res.write(`${JSON.stringify(hit)}\n`);
++        });
++
++        const cleanup = () => {
++            clearInterval(heartbeatTimer);
++            unsubscribe();
++        };
++
++        res.on('close', cleanup);
++        res.on('error', cleanup);
++    }));
++}
++
++async function activateAndroidAdbForPort(
++    req: Request,
++    res: Response,
++    apiModel: ApiModel,
++    proxyPort: number,
++    sessionManager?: SessionController
++): Promise<{
++    success: boolean;
++    proxyPort: number;
++    deviceId: string;
++    activationResult: { success: boolean; metadata?: Record<string, unknown> };
++} | undefined> {
++    const metadata = await apiModel.getInterceptorMetadata('android-adb', 'detailed') as
++        | { deviceIds?: string[] }
++        | undefined;
++    const deviceIds = metadata?.deviceIds ?? [];
++
++    const requestedDeviceId = req.body?.deviceId as string | undefined;
++    const enableSocks = !!req.body?.enableSocks;
++
++    let selectedDeviceId: string | undefined = requestedDeviceId;
++    if (!selectedDeviceId) {
++        if (deviceIds.length === 1) {
++            selectedDeviceId = deviceIds[0];
++        } else if (deviceIds.length > 1) {
++            res.status(409).send({
++                success: false,
++                proxyPort,
++                error: {
++                    message: 'Multiple Android devices are connected: specify deviceId in the request body',
++                    availableDeviceIds: deviceIds
++                }
++            });
++            return;
++        }
++    }
++
++    if (!selectedDeviceId) {
++        res.status(409).send({
++            success: false,
++            proxyPort,
++            error: { message: 'No Android devices are currently connected via ADB' }
++        });
++        return;
++    }
++
++    if (!deviceIds.includes(selectedDeviceId)) {
++        res.status(400).send({
++            success: false,
++            proxyPort,
++            error: {
++                message: `Unknown deviceId '${selectedDeviceId}'`,
++                availableDeviceIds: deviceIds
++            }
++        });
++        return;
++    }
++
++    const activationResult = await apiModel.activateInterceptor(
++        'android-adb',
++        proxyPort,
++        { deviceId: selectedDeviceId, enableSocks }
++    ) as { success: boolean };
++
++    const activationResultWithTrafficFallback = sessionManager
++        ? await withObservedTrafficFallback(activationResult, sessionManager)
++        : activationResult;
++
++    return {
++        success: activationResultWithTrafficFallback.success,
++        proxyPort,
++        deviceId: selectedDeviceId,
++        activationResult: activationResultWithTrafficFallback
++    };
++}
++
++async function withObservedTrafficFallback(
++    activationResult: {
++        success: boolean,
++        metadata?: {
++            reason?: string,
++            connectedStateSource?: string
++            [key: string]: unknown
++        }
++    },
++    sessionManager: SessionController
++) {
++    if (activationResult.success) return activationResult;
++
++    const reason = activationResult.metadata?.reason;
++    if (!reason?.startsWith('timeout_waiting_for_vpn_connected')) {
++        return activationResult;
++    }
++
++    const observedTraffic = await sessionManager.getObservedTrafficSignal?.({
++        waitMs: 4000,
++        pollIntervalMs: 500
++    }) as ObservedTrafficSignal | undefined;
++
++    const metadataText = JSON.stringify(activationResult.metadata ?? {}).toLowerCase();
++    const connectivityEvidence = (
++        metadataText.includes('vpn connected') ||
++        metadataText.includes('vpn:tech.httptoolkit.android.v1') ||
++        metadataText.includes('tun0') ||
++        metadataText.includes('httpproxy [127.0.0.1]') ||
++        metadataText.includes('vpntransportinfo sessionid=http toolkit')
++    );
++
++    if (connectivityEvidence || observedTraffic?.observed) {
++        return {
++            success: true,
++            metadata: {
++                ...activationResult.metadata,
++                reason: connectivityEvidence
++                    ? 'connectivity-evidence-confirms-vpn-active-after-timeout'
++                    : 'data-plane-active-without-explicit-vpn-state',
++                connectedStateSource: connectivityEvidence ? 'dumpsys-connectivity' : observedTraffic?.source,
++                degraded: true,
++                connectionMode: 'degraded-success',
++                warning: connectivityEvidence
++                    ? 'timeout reported, but dumpsys connectivity confirms VPN is connected'
++                    : 'explicit-vpn-state-not-observed',
++                observedTraffic
++            }
++        };
++    }
++
++    return activationResult;
++}
++
++function shouldRetryAndroidActivation(
++    activationResult: {
++        success: boolean,
++        metadata?: {
++            reason?: string
++        }
++    }
++): boolean {
++    if (activationResult.success) return false;
++    const reason = activationResult.metadata?.reason;
++    return reason?.startsWith('timeout_waiting_for_vpn_connected') ?? false;
+ }
+ 
+ function getProxyPort(stringishInput: any) {
+@@ -173,7 +1178,7 @@
+ // very awkward (but not actually very interesting) types.
+ function handleErrors<
+     Route extends string,
+-    P = Record<string, string>,
++    P = RouteParameters<Route>,
+     ResBody = any,
+     ReqBody = any,
+     ReqQuery = ParsedQs,
+@@ -212,4 +1217,4 @@
+             }
+         }
+     }) as any;
+-}
+\ No newline at end of file
++}

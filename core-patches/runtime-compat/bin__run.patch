@@ -1,0 +1,18 @@
+--- /mnt/data/htk34/httptoolkit-server-main/bin/run	2026-04-24 16:49:31.000000000 +0000
++++ /mnt/data/htk33/httptoolkit-server-main/bin/run	2026-04-25 12:04:56.000000000 +0000
+@@ -1,5 +1,15 @@
+ #!/usr/bin/env node
+ 
++const EXPECTED_NODE_VERSION = 'v22.20.0';
++
++if (process.version !== EXPECTED_NODE_VERSION) {
++  console.error('ERROR: Unsupported Node runtime for httptoolkit-server.');
++  console.error(`nodePath=${process.execPath}`);
++  console.error(`nodeVersion=${process.version}`);
++  console.error(`expectedNodeVersion=${EXPECTED_NODE_VERSION}`);
++  process.exit(1);
++}
++
+ // The ctl and mcp commands handle --help themselves with dynamic content.
+ // Oclif's Main class intercepts --help before dispatching to any command,
+ // so we remap it to --show-help to bypass that interception.

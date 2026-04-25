@@ -1,0 +1,36 @@
+--- /mnt/data/htk34/httptoolkit-server-main/src/client/http-client.ts	2026-04-24 16:49:31.000000000 +0000
++++ /mnt/data/htk33/httptoolkit-server-main/src/client/http-client.ts	2026-04-25 12:04:56.000000000 +0000
+@@ -153,10 +153,14 @@
+             }));
+ 
+             response.on('end', () => {
+-                if (response.rawTrailers?.length) {
++                const pairedRawTrailers = response.rawTrailers?.length
++                    ? pairFlatRawHeaders(response.rawTrailers)
++                    : pairObjectHeaders(response.trailers);
++
++                if (pairedRawTrailers?.length) {
+                     resultsStream.push({
+                         type: 'response-trailers',
+-                        trailers: pairFlatRawHeaders(response.rawTrailers),
++                        trailers: pairedRawTrailers,
+                         timestamp: performance.now()
+                     });
+                 }
+@@ -192,4 +196,14 @@
+  */
+ export function flattenPairedRawHeaders(rawHeaders: RawHeaders): string[] {
+     return rawHeaders.flat();
+-}
+\ No newline at end of file
++}
++
++function pairObjectHeaders(
++    headers: http.IncomingHttpHeaders
++): RawHeaders {
++    return Object.entries(headers).flatMap(([key, value]): RawHeaders => {
++        if (_.isArray(value)) return value.map((v) => [key, v]);
++        if (_.isString(value)) return [[key, value]];
++        return [];
++    });
++}

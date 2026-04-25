@@ -1,0 +1,20 @@
+{
+  "name": "httptoolkit-lab-addon",
+  "version": "0.1.0-migration",
+  "private": true,
+  "description": "External addon migration package for Android/headless/Qidian HTTP Toolkit lab features.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@devicefarmer/adbkit": "^3.3.8",
+    "express": "^4.21.1",
+    "mockttp": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.3"
+  }
+}

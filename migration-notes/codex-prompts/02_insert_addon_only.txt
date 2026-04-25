@@ -1,0 +1,19 @@
+Insert lab-addon into the official HTTP Toolkit package without modifying official core code.
+
+Allowed:
+- copy lab-addon/ to external/httptoolkit-lab-addon/
+- add documentation explaining how to start it
+
+Forbidden:
+- do not modify src/api/rest-api.ts
+- do not modify src/interceptors/android/adb-commands.ts
+- do not apply core-patches
+- do not modify package.json
+
+Validation:
+- cd external/httptoolkit-lab-addon
+- npm install if needed
+- npm run typecheck if possible
+- npm run start and GET /health if possible
+
+Return changed files, tests run, and risks.

@@ -1,0 +1,162 @@
+--- /mnt/data/htk34/httptoolkit-server-main/src/index.ts	2026-04-24 16:49:31.000000000 +0000
++++ /mnt/data/htk33/httptoolkit-server-main/src/index.ts	2026-04-25 12:04:56.000000000 +0000
+@@ -33,6 +33,10 @@
+ } from './interceptors/docker/docker-interception-services';
+ import { clearWebExtensionConfig, updateWebExtensionConfig } from './webextension';
+ import { HttpClient } from './client/http-client';
++import { LiveResponseExporter } from './export/live-exporter';
++import { SessionManager } from './automation/session-manager';
++import { inspectAllAndroidVpnStates, runFastAndroidCleanup } from './interceptors/android/adb-commands';
++import { HeadlessHealthStore } from './automation/headless-health';
+ 
+ async function generateHTTPSConfig(configPath: string) {
+     const keyPath = path.join(configPath, 'ca.key');
+@@ -85,9 +89,16 @@
+         http: MockttpAdminPlugin,
+         webrtc: MockRTCAdminPlugin
+     }>,
+-    httpsConfig: { certPath: string, certContent: string }
++    httpsConfig: { certPath: string, certContent: string },
++    liveExporter: LiveResponseExporter,
++    updateLatestActiveProxyPort: (proxyPort: number | undefined) => void,
++    options: {
++        onMockSessionStarted?: (proxyPort: number) => void,
++        onMockSessionStopping?: (proxyPort: number) => void
++    } = {}
+ ) {
+     let activeSessions = 0;
++    const activeProxyPorts = new Set<number>();
+ 
+     standalone.on('mock-session-started', async ({ http, webrtc }, sessionId) => {
+         activeSessions += 1;
+@@ -97,6 +108,10 @@
+         }
+ 
+         const httpProxyPort = http.getMockServer().port;
++        options.onMockSessionStarted?.(httpProxyPort);
++        activeProxyPorts.add(httpProxyPort);
++        updateLatestActiveProxyPort(httpProxyPort);
++        await liveExporter.attachToMockServer(http.getMockServer());
+ 
+         console.log(`Mock session started, http on port ${
+             httpProxyPort
+@@ -118,6 +133,13 @@
+     standalone.on('mock-session-stopping', ({ http }) => {
+         activeSessions -= 1;
+         const httpProxyPort = http.getMockServer().port;
++        options.onMockSessionStopping?.(httpProxyPort);
++        activeProxyPorts.delete(httpProxyPort);
++        updateLatestActiveProxyPort(
++            activeProxyPorts.size
++                ? Array.from(activeProxyPorts).pop()
++                : undefined
++        );
+ 
+         stopDockerInterceptionServices(httpProxyPort, ruleParameters)
+         .catch((error) => {
+@@ -212,14 +234,84 @@
+         ruleParameters // Rule parameter dictionary
+     });
+ 
+-    manageBackgroundServices(standalone, httpsConfig);
++    const liveExporter = new LiveResponseExporter(
++        path.join(configPath, 'live-export-targets.json'),
++        path.join(process.cwd(), 'exports')
++    );
++    await liveExporter.initialize();
++    let latestActiveProxyPort: number | undefined = undefined;
++    const sessionManager = new SessionManager();
++    manageBackgroundServices(
++        standalone,
++        httpsConfig,
++        liveExporter,
++        (proxyPort) => {
++            latestActiveProxyPort = proxyPort;
++        },
++        {
++            onMockSessionStopping: (proxyPort) => {
++                const latestSession = sessionManager.getLatestSession();
++                if (latestSession.active && latestSession.proxyPort === proxyPort) {
++                    sessionManager.clearLatestSession();
++                }
++            }
++        }
++    );
+ 
+     await standalone.start({
+         port: 45456,
+         host: '127.0.0.1'
+     });
+ 
+-    addShutdownHandler(() => standalone.stop());
++    const healthStore = new HeadlessHealthStore();
++    addShutdownHandler(async () => {
++        const cleanupStartedAt = new Date().toISOString();
++        let cleanupTimedOut = false;
++        let cleanupResult: unknown = {};
++        let diagnosticResult: unknown = {};
++        const fastCleanupOutcome = await Promise.race([
++            runFastAndroidCleanup().then((result) => ({ timedOut: false as const, result })),
++            delay(15000).then(() => ({ timedOut: true as const, result: undefined }))
++        ]);
++
++        if (fastCleanupOutcome.timedOut) {
++            cleanupTimedOut = true;
++            cleanupResult = { success: false, error: 'fast-cleanup-timeout-15000ms' };
++        } else {
++            cleanupResult = fastCleanupOutcome.result;
++        }
++
++        const diagnosticOutcome = await Promise.race([
++            inspectAllAndroidVpnStates().then((result) => ({ timedOut: false as const, result })),
++            delay(30000).then(() => ({ timedOut: true as const, result: undefined }))
++        ]);
++        if (diagnosticOutcome.timedOut) {
++            console.warn('Android diagnostic cleanup timed out after 30000ms');
++            diagnosticResult = { success: false, error: 'diagnostic-timeout-30000ms' };
++        } else {
++            diagnosticResult = diagnosticOutcome.result;
++        }
++
++        const cleanupFinishedAt = new Date().toISOString();
++        await healthStore.patch({
++            lastShutdownCleanup: {
++                cleanupStartedAt,
++                cleanupFinishedAt,
++                cleanupTimedOut,
++                cleanupResult,
++                diagnosticResult
++            }
++        });
++        if ((cleanupResult as any)?.success === false) {
++            await healthStore.patch({
++                state: 'ERROR',
++                lastCleanupResult: cleanupResult,
++                lastError: ((cleanupResult as any)?.errors || []).join('; ') || 'stateless android cleanup failed during shutdown'
++            });
++        }
++        await sessionManager.stopLatestSession();
++        await standalone.stop();
++    });
+ 
+     const standaloneSetupTime = Date.now();
+     console.log('Standalone server started in', standaloneSetupTime - certSetupTime, 'ms');
+@@ -228,7 +320,10 @@
+     const apiServer = new HttpToolkitServerApi(
+         { configPath, authToken: options.authToken, https: httpsConfig },
+         new HttpClient(ruleParameters),
+-        () => standalone.ruleParameterKeys
++        () => standalone.ruleParameterKeys,
++        () => latestActiveProxyPort,
++        liveExporter,
++        sessionManager
+     );
+ 
+     const updateMutex = new Mutex();
+@@ -280,4 +375,4 @@
+ 
+     console.log('Server started in', Date.now() - standaloneSetupTime, 'ms');
+     console.log('Total startup took', Date.now() - startTime, 'ms');
+-}
+\ No newline at end of file
++}
