@@ -1,0 +1,46 @@
+Read AGENTS.md and lab-addon/AGENTS.md.
+
+Task:
+Inspect the inserted lab-addon directory only.
+
+Goals:
+
+1. Report the current addon structure.
+2. Identify which files are copied migration assets versus runnable addon code.
+3. Identify broken imports or missing dependencies.
+4. Identify whether lab-addon can compile independently.
+5. Produce a short report at lab-addon/MIGRATION_TODO.md.
+
+Allowed paths:
+
+* lab-addon/**
+
+Forbidden paths:
+
+* src/**
+* package.json
+* package-lock.json
+* bin/**
+* nss/**
+* overrides/**
+* .github/**
+* core-patches/**
+
+Rules:
+
+* Do not modify official core files.
+* Do not apply any patch.
+* Do not move files yet.
+* Do not run whole-repository formatting.
+
+Validation:
+
+* git status
+* git diff --stat
+
+Return:
+
+* files inspected
+* files changed
+* official core touched: yes/no
+* top 10 migration blockers
