@@ -1,0 +1,48 @@
+--- /mnt/data/htk34/httptoolkit-server-main/src/api/api-server.ts	2026-04-24 16:49:31.000000000 +0000
++++ /mnt/data/htk33/httptoolkit-server-main/src/api/api-server.ts	2026-04-25 12:04:56.000000000 +0000
+@@ -16,6 +16,8 @@
+ import { exposeRestAPI } from './rest-api';
+ import { HttpClient } from '../client/http-client';
+ import { UiOperationBridge, getSocketPath } from './ui-operation-bridge';
++import { LiveResponseExporter } from '../export/live-exporter';
++import { SessionManager } from '../automation/session-manager';
+ 
+ /**
+  * This file contains the core server API, used by the UI to query
+@@ -49,7 +51,10 @@
+     constructor(
+         config: HtkConfig,
+         httpClient: HttpClient,
+-        getRuleParamKeys: () => string[]
++        getRuleParamKeys: () => string[],
++        getLatestActiveProxyPort: () => number | undefined,
++        liveExporter?: LiveResponseExporter,
++        sessionManager: SessionManager = new SessionManager()
+     ) {
+         super();
+ 
+@@ -136,7 +141,7 @@
+ 
+         this.server.use(express.json());
+ 
+-        exposeRestAPI(this.server, apiModel);
++        exposeRestAPI(this.server, apiModel, liveExporter, getLatestActiveProxyPort, sessionManager);
+         exposeGraphQLAPI(this.server, apiModel);
+     }
+ 
+@@ -144,7 +149,7 @@
+         const socketReady = this.startBridgeApiServer();
+ 
+         await new Promise<void>((resolve, reject) => {
+-            const httpServer: http.Server = this.server.listen(45457, '127.0.0.1', () => resolve());
++            const httpServer: http.Server = this.server.listen(45457, '127.0.0.1', resolve);
+             httpServer.once('error', reject);
+ 
+             this.attachWebSocketBridge(httpServer);
+@@ -198,4 +203,4 @@
+         }
+     }
+ 
+-};
+\ No newline at end of file
++};

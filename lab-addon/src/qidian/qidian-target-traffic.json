@@ -1,0 +1,21 @@
+{
+  "hostIncludes": [
+    "qidian.com",
+    "druidv6.if.qidian.com",
+    "h5.if.qidian.com"
+  ],
+  "urlIncludes": [
+    "qidian",
+    "book",
+    "chapter",
+    "circleIndex"
+  ],
+  "excludeUrlIncludes": [
+    "android.httptoolkit.tech/config",
+    "amiusing.httptoolkit.tech/certificate"
+  ],
+  "notes": [
+    "circleIndex is out-of-circle index traffic, not the book-circle/comment-circle entrance.",
+    "Keep Qidian-specific matching in addon/config, not in generic HTTP Toolkit server code."
+  ]
+}

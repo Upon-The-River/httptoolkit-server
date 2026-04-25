@@ -1,0 +1,114 @@
+--- /mnt/data/htk34/httptoolkit-server-main/package.json	2026-04-24 16:49:31.000000000 +0000
++++ /mnt/data/htk33/httptoolkit-server-main/package.json	2026-04-25 12:04:56.000000000 +0000
+@@ -1,6 +1,6 @@
+ {
+   "name": "httptoolkit-server",
+-  "version": "1.25.1",
++  "version": "1.25.0",
+   "author": "Tim Perry <pimterry@gmail.com>",
+   "types": "lib/index.d.ts",
+   "main": "lib/index.js",
+@@ -15,9 +15,9 @@
+   ],
+   "scripts": {
+     "preinstall": "check-msvc-runtime",
+-    "start": "node --watch ./bin/run start",
++    "start": "scripts\\node22.cmd ./bin/run start",
+     "build:src": "npm-run-all build:src:clean build:src:ts",
+-    "build:src:clean": "node -e \"require('fs').rmSync('lib',{recursive:true,force:true})\"",
++    "build:src:clean": "rimraf lib/",
+     "build:src:ts": "tsc --build --force",
+     "build:manifest": "oclif-dev manifest",
+     "build:bundle": "rspack build",
+@@ -28,7 +28,10 @@
+     "test": "npm-run-all test:unit test:integration",
+     "test:unit": "mocha --exit 'test/unit/*.spec.ts'",
+     "test:integration": "mocha --exit 'test/integration/**/*.spec.ts'",
+-    "test:integration:release": "cross-env TEST_BUILT_TARBALL=1 npm run test:integration"
++    "test:integration:release": "cross-env TEST_BUILT_TARBALL=1 npm run test:integration",
++    "doctor:android-network": "powershell -ExecutionPolicy Bypass -File ./scripts/doctor-phone-network.ps1",
++    "test:android-safety": "mocha --exit 'test/unit/android-network-*.spec.ts' 'test/unit/rest-api-automation.spec.ts' --grep 'android-adb/start-headless|start-headless|Android network PowerShell scripts|Android network safety'",
++    "typecheck": "tsc --noEmit"
+   },
+   "mocha": {
+     "node-option": [
+@@ -57,7 +60,7 @@
+     "@types/dns2": "^2.0.0",
+     "@types/dockerode": "^3.3.0",
+     "@types/event-stream": "^4.0.0",
+-    "@types/express-serve-static-core": "^5.1.1",
++    "@types/express-serve-static-core": "^4.17.24",
+     "@types/gunzip-maybe": "^1.4.0",
+     "@types/node-fetch": "^2.5.4",
+     "@types/tar-fs": "^2.0.0",
+@@ -73,29 +76,31 @@
+     "dockerode": "^4.0.5",
+     "env-paths": "^1.0.0",
+     "event-stream": "^4.0.1",
+-    "express": "^5.2.1",
++    "express": "^4.21.1",
+     "frida-js": "^0.4.0",
+-    "get-port": "^7.2.0",
++    "get-port": "^5.1.1",
+     "graphql": "^16.13.2",
+     "graphql-http": "^1.22.0",
+     "graphql-tag": "^2.12.6",
+     "gunzip-maybe": "^1.4.2",
++    "iconv-lite": "^0.4.24",
+     "lodash": "^4.18.1",
+     "lookpath": "^1.2.1",
+     "mime-types": "^2.1.27",
+     "mobx": "^6.3.5",
+     "mockrtc": "^0.5.1",
+-    "mockttp": "^4.3.1",
++    "mockttp": "^4.3.0",
+     "node-fetch": "^2.6.1",
+     "node-forge": "^1.4.0",
+     "node-gsettings-wrapper": "^0.5.0",
+     "os-proxy-config": "^1.1.1",
+     "raw-body": "^2.4.1",
+     "registry-js": "^1.15.1",
++    "rimraf": "^2.6.2",
+     "tar-fs": "^2.1.4",
+     "tar-stream": "^2.2.0",
+     "tmp": "0.2.4",
+-    "tslib": "^2.8.1",
++    "tslib": "^1.9.3",
+     "usbmux-client": "^0.2.1",
+     "win-version-info": "^5.0.1",
+     "ws": "^8.18.0"
+@@ -110,7 +115,7 @@
+     "@types/chai": "^4.1.6",
+     "@types/decompress": "^4.2.4",
+     "@types/env-paths": "^1.0.2",
+-    "@types/express": "^5.0.6",
++    "@types/express": "^4.16.1",
+     "@types/fs-extra": "^8.0.0",
+     "@types/klaw": "^3.0.2",
+     "@types/lodash": "^4.14.117",
+@@ -118,6 +123,7 @@
+     "@types/node": "~20.11.18",
+     "@types/node-forge": "^0.9.9",
+     "@types/request-promise-native": "^1.0.15",
++    "@types/rimraf": "^2.0.2",
+     "@types/ws": "^8.5.0",
+     "axios": "^1.15.0",
+     "bent": "^1.5.13",
+@@ -151,7 +157,7 @@
+     "prebuild-install": "^7.0.0"
+   },
+   "engines": {
+-    "node": "v24.15.0"
++    "node": "v22.20.0"
+   },
+   "keywords": [
+     "http",
+@@ -194,7 +200,7 @@
+         }
+       },
+       "node": {
+-        "version": "24.15.0",
++        "version": "22.20.0",
+         "targets": [
+           "win32-x64",
+           "linux-x64",

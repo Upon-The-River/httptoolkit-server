@@ -1,0 +1,20 @@
+--- /mnt/data/htk34/httptoolkit-server-main/src/interceptors/chromium-based-interceptors.ts	2026-04-24 16:49:31.000000000 +0000
++++ /mnt/data/htk33/httptoolkit-server-main/src/interceptors/chromium-based-interceptors.ts	2026-04-25 12:04:56.000000000 +0000
+@@ -343,7 +343,9 @@
+                     await windowsClose(browser.pid!)
+                         .then(() => waitForExit(browser.pid!));
+                     return;
+-                } catch (e) {} // If this fails/times out, kill like we do elsewhere:
++                } catch (e) {
++                    console.warn('Failed to cleanly close Chromium process, falling back to hard stop:', e);
++                } // If this fails/times out, kill like we do elsewhere:
+             }
+ 
+             const exitPromise = new Promise((resolve) => browser!.process.once('close', resolve));
+@@ -511,4 +513,4 @@
+         super(config, 'opera');
+     }
+ 
+-};
+\ No newline at end of file
++};

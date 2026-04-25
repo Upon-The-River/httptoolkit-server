@@ -1,0 +1,15 @@
+Migrate automation routes from the working fork into lab-addon/src/server.ts.
+
+Use core-patches/high-value-extract/src__api__rest-api.ts.patch as reference only.
+
+Rules:
+- Do not copy the whole rest-api.ts file.
+- Preserve route paths and response shapes.
+- Do not modify official src/api/rest-api.ts.
+- If a route needs internal HTTP Toolkit data that is unavailable externally, stop and report the required minimal hook.
+
+Validation:
+- npm run typecheck in lab-addon
+- call /health and /migration/pending-routes
+
+Return migrated routes, unresolved dependencies, and risks.

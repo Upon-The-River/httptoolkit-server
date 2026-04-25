@@ -1,0 +1,32 @@
+--- /mnt/data/htk34/httptoolkit-server-main/src/shutdown.ts	2026-04-24 16:49:31.000000000 +0000
++++ /mnt/data/htk33/httptoolkit-server-main/src/shutdown.ts	2026-04-25 12:04:56.000000000 +0000
+@@ -1,4 +1,3 @@
+-import { delay } from '@httptoolkit/util';
+ import { logError } from './error-tracking';
+ 
+ type ShutdownHandler = () => Promise<unknown>;
+@@ -16,21 +15,15 @@
+ export async function shutdown(code: number, cause: string) {
+     console.log(`Shutting down after ${cause}...`);
+ 
+-    const shutdownPromises = Promise.all(shutdownHandlers.map(
+-        async (handler) => {
++    await (async () => {
++        for (const handler of shutdownHandlers) {
+             try {
+                 await handler();
+             } catch (e) {
+                 logError(e);
+             }
+         }
+-    ));
+-
+-    await Promise.race([
+-        shutdownPromises,
+-        delay(3000) // After 3 seconds, we just close anyway, we're done.
+-    ]);
++    })();
+ 
+     process.exit(code);
+ }
+-

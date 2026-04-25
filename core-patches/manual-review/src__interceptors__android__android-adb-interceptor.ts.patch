@@ -1,0 +1,119 @@
+--- /mnt/data/htk34/httptoolkit-server-main/src/interceptors/android/android-adb-interceptor.ts	2026-04-24 16:49:31.000000000 +0000
++++ /mnt/data/htk33/httptoolkit-server-main/src/interceptors/android/android-adb-interceptor.ts	2026-04-25 12:04:56.000000000 +0000
+@@ -12,13 +12,16 @@
+     createAdbClient,
+     getConnectedDevices,
+     getRootCommand,
++    getAdbTunnelDiagnostic,
+     pushFile,
+     injectSystemCertificate,
+     stringAsStream,
+     hasCertInstalled,
+-    bringToFront,
++    bringPackageToFront,
+     setChromeFlags,
+     startActivity,
++    resetAndroidStateLogBuffer,
++    waitForAndroidToolkitConnected,
+     createPersistentReverseTunnel,
+     closeReverseTunnel,
+     EMULATOR_HOST_IPS
+@@ -33,6 +36,8 @@
+         .replace('/', '_');
+ }
+ 
++const HTTP_TOOLKIT_ANDROID_PACKAGE = 'tech.httptoolkit.android.v1';
++
+ export class AndroidAdbInterceptor implements Interceptor {
+     readonly id = 'android-adb';
+     readonly version = '1.0.0';
+@@ -74,7 +79,7 @@
+ 
+         await this.injectSystemCertIfPossible(deviceClient, this.config.https.certContent);
+ 
+-        if (!(await deviceClient.isInstalled('tech.httptoolkit.android.v1'))) {
++        if (!(await deviceClient.isInstalled(HTTP_TOOLKIT_ANDROID_PACKAGE))) {
+             console.log("App not installed, installing...");
+             try {
+                 await deviceClient.install(await streamLatestApk(this.config));
+@@ -92,10 +97,7 @@
+ 
+         // Now that the app is installed, bring it to the front (avoids issues with starting a
+         // service for the VPN when in the foreground).
+-        await bringToFront(
+-            deviceClient,
+-            'tech.httptoolkit.android.v1/tech.httptoolkit.android.MainActivity'
+-        ).catch(logError); // Not that important, so we continue if this fails somehow
++        await bringPackageToFront(deviceClient, HTTP_TOOLKIT_ANDROID_PACKAGE);
+ 
+         // Build a trigger URL to activate the proxy on the device:
+         const setupParams = {
+@@ -115,12 +117,48 @@
+         await createPersistentReverseTunnel(deviceClient, proxyPort, proxyPort)
+             .catch(() => {}); // If we can't tunnel that's OK - we'll use wifi/etc instead
+ 
++        await resetAndroidStateLogBuffer(deviceClient);
++
+         // Use ADB to launch the app with the proxy details
+         await startActivity(deviceClient, {
+             action: 'tech.httptoolkit.android.ACTIVATE',
+             data: `https://android.httptoolkit.tech/connect/?data=${intentData}`,
+             retries: 10
+         });
++        console.log('Android ADB activation: ACTIVATE intent sent');
++
++        console.log('Android ADB activation: waiting for connected state');
++        const connectedState = await waitForAndroidToolkitConnected(deviceClient, {
++            timeoutMs: 15000,
++            pollIntervalMs: 1000
++        });
++
++        if (!connectedState.connected) {
++            const tunnelDiagnostic = getAdbTunnelDiagnostic(deviceClient, proxyPort, proxyPort);
++            if (tunnelDiagnostic) {
++                console.log(
++                    `Android ADB activation: tunnel diagnostic = ${tunnelDiagnostic.status}` +
++                    ` (${tunnelDiagnostic.diagnosis ?? 'no-diagnosis'})`
++                );
++            }
++            console.log(
++                `Android ADB activation: connected-state source = none (${connectedState.reason ?? 'timeout'})`
++            );
++            throw Object.assign(
++                new Error(
++                    `Android device did not reach VPN connected state after ACTIVATE (${connectedState.reason ?? 'unknown'})`
++                ),
++                {
++                    reportable: false,
++                    metadata: {
++                        reason: connectedState.reason ?? 'android_activation_not_connected',
++                        connectedStateSource: 'none',
++                        adbTunnelDiagnostic: tunnelDiagnostic
++                    }
++                }
++            );
++        }
++        console.log(`Android ADB activation: connected-state source = ${connectedState.signal ?? 'unknown-signal'}`);
+ 
+         this.deviceProxyMapping[proxyPort] = this.deviceProxyMapping[proxyPort] || [];
+         if (!this.deviceProxyMapping[proxyPort].includes(options.deviceId)) {
+@@ -137,10 +175,8 @@
+ 
+                 // Bring app to the front, as otherwise it can't run intents (to tell
+                 // the background service to stop the VPN)
+-                await bringToFront(
+-                    deviceClient,
+-                    'tech.httptoolkit.android.v1/tech.httptoolkit.android.MainActivity'
+-                ).catch(console.log); // Not that important, we continue if this fails somehow
++                await bringPackageToFront(deviceClient, HTTP_TOOLKIT_ANDROID_PACKAGE)
++                    .catch(console.log); // Not that important, we continue if this fails somehow
+ 
+                 await deviceClient.startActivity({
+                     wait: true,
+@@ -203,4 +239,4 @@
+             logError(e);
+         }
+     }
+-}
+\ No newline at end of file
++}
