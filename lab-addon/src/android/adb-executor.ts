@@ -23,14 +23,13 @@ export class SystemAdbExecutor implements AdbExecutor {
             ...command
         ];
 
-        const { stdout, stderr } = await execFileAsync(this.adbBinary, args, {
+        const { stdout } = await execFileAsync(this.adbBinary, args, {
             timeout: options.timeoutMs ?? 10000,
             windowsHide: true,
             maxBuffer: 1024 * 1024
         });
 
-        const combinedOutput = `${stdout ?? ''}${stderr ?? ''}`.trim();
-        return combinedOutput;
+        return (stdout ?? '').trim();
     }
 
     async listOnlineDevices(): Promise<string[]> {
@@ -52,7 +51,13 @@ export class SystemAdbExecutor implements AdbExecutor {
 }
 
 export function parseAndroidSetting(value: string): string | null {
-    if (normalizeValue(value) === null) return null;
-    if (value.trim() === 'null') return null;
-    return value.trim();
+    const normalized = normalizeValue(value);
+    if (normalized === null) return null;
+    if (normalized.toLowerCase() === 'null') return null;
+
+    if (/^(error:|adb:|usage:|exception occurred|security exception|failed to)/i.test(normalized)) {
+        return null;
+    }
+
+    return normalized;
 }

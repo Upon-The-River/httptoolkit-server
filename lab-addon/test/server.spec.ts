@@ -4,6 +4,7 @@ import { afterEach, describe, it } from 'node:test';
 
 import { AndroidNetworkSafetyApi } from '../src/android/android-network-safety';
 import { createApp, SessionManagerLike, startServer } from '../src/server';
+import { HeadlessControlApi } from '../src/headless/headless-types';
 import { SessionManager } from '../src/session/session-manager';
 
 const openServers: Array<{ close: () => Promise<void> }> = [];
@@ -30,6 +31,33 @@ async function startTestServer(app = createApp()) {
 
     return { baseUrl };
 }
+
+const baseHeadlessControl: HeadlessControlApi = {
+    start: async () => ({
+        ok: false,
+        implemented: false,
+        action: 'start',
+        reason: 'Addon headless start orchestration is not fully migrated yet.'
+    }),
+    stop: async () => ({
+        ok: true,
+        implemented: true,
+        action: 'stop',
+        output: { exitCode: 0, stdout: 'stopped', stderr: '' }
+    }),
+    recover: async () => ({
+        ok: false,
+        implemented: true,
+        action: 'recover',
+        output: { exitCode: 1, stdout: '', stderr: 'failed' }
+    }),
+    getCapabilities: () => ({
+        health: { implemented: true, mutatesDeviceState: false },
+        start: { implemented: false, mutatesDeviceState: false, reason: 'Addon headless start orchestration is not fully migrated yet.' },
+        stop: { implemented: true, mutatesDeviceState: true },
+        recover: { implemented: true, mutatesDeviceState: true }
+    })
+};
 
 const baseAndroidSafety: AndroidNetworkSafetyApi = {
     inspectNetwork: async () => ({
@@ -302,6 +330,74 @@ describe('lab addon service endpoints', () => {
         assert.deepEqual(await response.json(), {
             inspect: { implemented: true, mutatesDeviceState: false },
             rescue: { implemented: false, mutatesDeviceState: false, reason: 'rescue migration pending' }
+        });
+    });
+
+
+    it('returns addon headless health at /headless/health', async () => {
+        const { baseUrl } = await startTestServer(createApp({ headlessControl: baseHeadlessControl }));
+
+        const response = await fetch(`${baseUrl}/headless/health`);
+        assert.equal(response.status, 200);
+
+        const body = await response.json();
+        assert.equal(body.ok, true);
+        assert.equal(body.service, 'headless-control');
+        assert.equal(body.startImplemented, false);
+        assert.equal(body.stopImplemented, true);
+        assert.equal(body.recoverImplemented, true);
+    });
+
+    it('returns safe start stub at /headless/start', async () => {
+        const { baseUrl } = await startTestServer(createApp({ headlessControl: baseHeadlessControl }));
+
+        const response = await fetch(`${baseUrl}/headless/start`, { method: 'POST' });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            ok: false,
+            implemented: false,
+            action: 'start',
+            reason: 'Addon headless start orchestration is not fully migrated yet.'
+        });
+    });
+
+    it('runs stop action at /headless/stop', async () => {
+        const { baseUrl } = await startTestServer(createApp({ headlessControl: baseHeadlessControl }));
+
+        const response = await fetch(`${baseUrl}/headless/stop`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'emulator-5554' })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.ok, true);
+        assert.equal(body.action, 'stop');
+        assert.equal(body.implemented, true);
+    });
+
+    it('returns recover action result at /headless/recover', async () => {
+        const { baseUrl } = await startTestServer(createApp({ headlessControl: baseHeadlessControl }));
+
+        const response = await fetch(`${baseUrl}/headless/recover`, { method: 'POST' });
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.action, 'recover');
+        assert.equal(body.implemented, true);
+        assert.equal(body.ok, false);
+    });
+
+    it('returns headless capabilities at /headless/capabilities', async () => {
+        const { baseUrl } = await startTestServer(createApp({ headlessControl: baseHeadlessControl }));
+
+        const response = await fetch(`${baseUrl}/headless/capabilities`);
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            health: { implemented: true, mutatesDeviceState: false },
+            start: { implemented: false, mutatesDeviceState: false, reason: 'Addon headless start orchestration is not fully migrated yet.' },
+            stop: { implemented: true, mutatesDeviceState: true },
+            recover: { implemented: true, mutatesDeviceState: true }
         });
     });
 
