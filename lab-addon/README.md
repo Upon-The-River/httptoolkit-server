@@ -36,9 +36,11 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
   - Safe explicit stub until full start orchestration is migrated.
   - Returns `implemented: false` with reason.
 - `POST /headless/stop`
-  - Implemented through addon PowerShell script runner (`-UseAddonServer`).
+  - Safe explicit stub until non-recursive stop orchestration is implemented.
+  - Returns `implemented: false` with reason.
 - `POST /headless/recover`
-  - Implemented through addon PowerShell script runner (`-UseAddonServer`).
+  - Safe explicit stub until non-recursive recovery orchestration is implemented.
+  - Returns `implemented: false` with reason.
 - `GET /headless/capabilities`
   - Lists implemented vs pending headless actions.
 
@@ -46,11 +48,11 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
 
 - Implemented:
   - `GET /headless/health`
+  - `GET /headless/capabilities`
+- Stubbed (safe no-op responses):
+  - `POST /headless/start`
   - `POST /headless/stop`
   - `POST /headless/recover`
-  - `GET /headless/capabilities`
-- Stubbed:
-  - `POST /headless/start`
 
 ## Run locally
 
@@ -100,9 +102,16 @@ Capabilities:
 curl http://127.0.0.1:45457/headless/capabilities
 ```
 
-Scripts in addon-server mode:
+PowerShell client entrypoints (operator-invoked scripts):
 
 ```powershell
 ./scripts/android/stop-headless.ps1 -UseAddonServer -DeviceId emulator-5554
 ./scripts/android/recover-headless.ps1 -UseAddonServer -DeviceId emulator-5554
 ```
+
+
+## Recursion safety note
+
+The PowerShell scripts under `scripts/android/` are client entrypoints. They may call addon endpoints when `-UseAddonServer` is provided by the operator.
+
+Addon endpoints **must not** invoke those scripts in `-UseAddonServer` mode, because that creates recursive self-calls (endpoint -> script -> endpoint). Until a non-recursive implementation is available, `/headless/start`, `/headless/stop`, and `/headless/recover` remain explicit safe stubs.

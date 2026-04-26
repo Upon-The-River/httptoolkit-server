@@ -40,22 +40,22 @@ const baseHeadlessControl: HeadlessControlApi = {
         reason: 'Addon headless start orchestration is not fully migrated yet.'
     }),
     stop: async () => ({
-        ok: true,
-        implemented: true,
+        ok: false,
+        implemented: false,
         action: 'stop',
-        output: { exitCode: 0, stdout: 'stopped', stderr: '' }
+        reason: 'Stop is intentionally stubbed to avoid recursive addon-server script calls.'
     }),
     recover: async () => ({
         ok: false,
-        implemented: true,
+        implemented: false,
         action: 'recover',
-        output: { exitCode: 1, stdout: '', stderr: 'failed' }
+        reason: 'Recover is intentionally stubbed to avoid recursive addon-server script calls.'
     }),
     getCapabilities: () => ({
         health: { implemented: true, mutatesDeviceState: false },
         start: { implemented: false, mutatesDeviceState: false, reason: 'Addon headless start orchestration is not fully migrated yet.' },
-        stop: { implemented: true, mutatesDeviceState: true },
-        recover: { implemented: true, mutatesDeviceState: true }
+        stop: { implemented: false, mutatesDeviceState: false, reason: 'Stop is intentionally stubbed to avoid recursive addon-server script calls.' },
+        recover: { implemented: false, mutatesDeviceState: false, reason: 'Recover is intentionally stubbed to avoid recursive addon-server script calls.' }
     })
 };
 
@@ -344,8 +344,8 @@ describe('lab addon service endpoints', () => {
         assert.equal(body.ok, true);
         assert.equal(body.service, 'headless-control');
         assert.equal(body.startImplemented, false);
-        assert.equal(body.stopImplemented, true);
-        assert.equal(body.recoverImplemented, true);
+        assert.equal(body.stopImplemented, false);
+        assert.equal(body.recoverImplemented, false);
     });
 
     it('returns safe start stub at /headless/start', async () => {
@@ -361,7 +361,7 @@ describe('lab addon service endpoints', () => {
         });
     });
 
-    it('runs stop action at /headless/stop', async () => {
+    it('returns safe stop stub at /headless/stop without recursive addon-server script call', async () => {
         const { baseUrl } = await startTestServer(createApp({ headlessControl: baseHeadlessControl }));
 
         const response = await fetch(`${baseUrl}/headless/stop`, {
@@ -372,9 +372,10 @@ describe('lab addon service endpoints', () => {
 
         assert.equal(response.status, 200);
         const body = await response.json();
-        assert.equal(body.ok, true);
+        assert.equal(body.ok, false);
         assert.equal(body.action, 'stop');
-        assert.equal(body.implemented, true);
+        assert.equal(body.implemented, false);
+        assert.equal(body.reason, 'Stop is intentionally stubbed to avoid recursive addon-server script calls.');
     });
 
     it('returns recover action result at /headless/recover', async () => {
@@ -384,8 +385,9 @@ describe('lab addon service endpoints', () => {
         assert.equal(response.status, 200);
         const body = await response.json();
         assert.equal(body.action, 'recover');
-        assert.equal(body.implemented, true);
+        assert.equal(body.implemented, false);
         assert.equal(body.ok, false);
+        assert.equal(body.reason, 'Recover is intentionally stubbed to avoid recursive addon-server script calls.');
     });
 
     it('returns headless capabilities at /headless/capabilities', async () => {
@@ -396,8 +398,8 @@ describe('lab addon service endpoints', () => {
         assert.deepEqual(await response.json(), {
             health: { implemented: true, mutatesDeviceState: false },
             start: { implemented: false, mutatesDeviceState: false, reason: 'Addon headless start orchestration is not fully migrated yet.' },
-            stop: { implemented: true, mutatesDeviceState: true },
-            recover: { implemented: true, mutatesDeviceState: true }
+            stop: { implemented: false, mutatesDeviceState: false, reason: 'Stop is intentionally stubbed to avoid recursive addon-server script calls.' },
+            recover: { implemented: false, mutatesDeviceState: false, reason: 'Recover is intentionally stubbed to avoid recursive addon-server script calls.' }
         });
     });
 
