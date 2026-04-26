@@ -10,7 +10,13 @@ import {
 } from './session/session-manager';
 
 export interface SessionManagerLike {
+    startSessionIfNeeded(): Promise<{
+        created: boolean,
+        proxyPort: number,
+        sessionUrl: string
+    }>;
     getLatestSession(): LatestSessionState;
+    stopLatestSession(): Promise<{ stopped: boolean }>;
     getTargetTrafficSignal(options?: { waitMs?: number, pollIntervalMs?: number }): Promise<TargetTrafficSignal>;
 }
 
@@ -67,6 +73,16 @@ export function createApp(options: CreateAppOptions = {}): Express {
         res.json(sessionManager.getLatestSession());
     });
 
+    app.post('/session/start', async (_req, res: Response) => {
+        const result = await sessionManager.startSessionIfNeeded();
+        res.json(result);
+    });
+
+    app.post('/session/stop', async (_req, res: Response) => {
+        const result = await sessionManager.stopLatestSession();
+        res.json(result);
+    });
+
     app.post('/session/target-signal', async (req: Request, res: Response) => {
         const waitMs = typeof req.body?.waitMs === 'number' ? req.body.waitMs : undefined;
         const pollIntervalMs = typeof req.body?.pollIntervalMs === 'number' ? req.body.pollIntervalMs : undefined;
@@ -86,8 +102,9 @@ export async function startServer(options: CreateAppOptions & {
     const host = options.host ?? '127.0.0.1';
     const port = options.port ?? Number(process.env.HTK_LAB_ADDON_PORT ?? 45457);
 
-    const server = await new Promise<Server>((resolve) => {
+    const server = await new Promise<Server>((resolve, reject) => {
         const runningServer = app.listen(port, host, () => resolve(runningServer));
+        runningServer.once('error', reject);
     });
 
     const boundPort = (server.address() as AddressInfo).port;
