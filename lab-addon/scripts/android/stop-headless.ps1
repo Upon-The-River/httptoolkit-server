@@ -1,11 +1,39 @@
 param(
   [string]$BaseUrl = "http://127.0.0.1:45457",
-  [string]$DeviceId
+  [string]$DeviceId,
+  [switch]$UseAddonServer
 )
 
 $ErrorActionPreference = "Continue"
 $Headers = @{ Origin = "https://app.httptoolkit.tech" }
 $apiReachable = $false
+
+if ($UseAddonServer) {
+  try {
+    $body = if ($DeviceId) { @{ deviceId = $DeviceId } } else { @{} }
+    $result = Invoke-RestMethod -Method Post -Uri "$BaseUrl/headless/stop" -Headers $Headers -ContentType "application/json" -Body ($body | ConvertTo-Json -Compress)
+    $apiReachable = $true
+    $result | ConvertTo-Json -Depth 12
+
+    if ($result.ok -eq $true) {
+      exit 0
+    }
+
+    Write-Error "headless stop returned non-success in addon mode"
+    exit 1
+  } catch {
+    if ($apiReachable) {
+      Write-Error "headless stop addon call failed after response handling: $($_.Exception.Message)"
+      exit 1
+    }
+
+    Write-Warning "headless addon API unavailable, running local adb rescue-phone-network fallback"
+    $fallbackArgs = @()
+    if ($DeviceId) { $fallbackArgs += @('-DeviceId', $DeviceId) }
+    & "$PSScriptRoot/rescue-phone-network.ps1" @fallbackArgs
+    exit $LASTEXITCODE
+  }
+}
 
 try {
   $body = if ($DeviceId) { @{ deviceId = $DeviceId } } else { @{} }

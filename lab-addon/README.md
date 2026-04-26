@@ -4,40 +4,53 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
 
 ## Service slice status
 
-`lab-addon` now runs as a small standalone HTTP service. It focuses on migration-safe utility endpoints and **does not apply any HTTP Toolkit core patches**.
+`lab-addon` runs as a standalone HTTP service and keeps the official HTTP Toolkit core unchanged.
 
-Migration material under `migration-assets/` is **reference-only** for incremental extraction and normalization. It is not wired into the running addon service.
+- ✅ Official core files are not modified by this addon slice.
+- ✅ Headless control API is exposed from addon-owned routes only.
+- ✅ Migration assets under `migration-assets/` are still reference-only.
 
 ## Available endpoints
 
+### Generic addon endpoints
+
 - `GET /health`
-  - Returns addon process health.
 - `GET /migration/pending-routes`
-  - Lists route groups still pending migration from the old fork.
 - `POST /qidian/match`
-  - JSON input: `{ "url": "..." }`
-  - Returns whether the URL matches Qidian target traffic rules.
 - `GET /session/latest`
-  - Returns the latest `SessionManager` state snapshot.
 - `POST /session/start`
-  - Starts (or reuses) the addon-side Mockttp remote session lifecycle.
-  - Returns `{ "created": true|false, "proxyPort": number, "sessionUrl": "..." }`.
 - `POST /session/stop`
-  - Stops the latest addon-side Mockttp remote session when present.
-  - Returns `{ "stopped": true|false }`.
 - `POST /session/target-signal`
-  - Optional JSON input: `{ "waitMs": 1000, "pollIntervalMs": 200 }`
-  - Returns target traffic observation signal from `SessionManager`.
 
-- `POST /android/network/inspect`
-  - Optional JSON input: `{ "deviceId": "emulator-5554" }`
-  - Runs a **non-mutating** Android network inspection and returns structured proxy/private DNS/VPN evidence.
-- `POST /android/network/rescue`
-  - Current migration-safe stub response: `{ "ok": false, "implemented": false, "reason": "rescue migration pending" }`.
-- `GET /android/network/capabilities`
-  - Returns implemented vs pending Android network safety actions.
+### Android network safety endpoints
 
-> Note: session endpoints currently manage addon-side Mockttp remote session behavior only.
+- `POST /android/network/inspect` (implemented, read-only)
+- `POST /android/network/rescue` (stub)
+- `GET /android/network/capabilities` (implemented)
+
+### Headless control endpoints (addon standalone slice)
+
+- `GET /headless/health`
+  - Returns addon-side headless service health summary.
+- `POST /headless/start`
+  - Safe explicit stub until full start orchestration is migrated.
+  - Returns `implemented: false` with reason.
+- `POST /headless/stop`
+  - Implemented through addon PowerShell script runner (`-UseAddonServer`).
+- `POST /headless/recover`
+  - Implemented through addon PowerShell script runner (`-UseAddonServer`).
+- `GET /headless/capabilities`
+  - Lists implemented vs pending headless actions.
+
+## Implemented vs stubbed actions
+
+- Implemented:
+  - `GET /headless/health`
+  - `POST /headless/stop`
+  - `POST /headless/recover`
+  - `GET /headless/capabilities`
+- Stubbed:
+  - `POST /headless/start`
 
 ## Run locally
 
@@ -51,79 +64,45 @@ npm run start
 
 Default bind: `http://127.0.0.1:45457`
 
-## PowerShell curl examples
+## PowerShell examples
 
 Health:
 
 ```powershell
-curl http://127.0.0.1:45457/health
+curl http://127.0.0.1:45457/headless/health
 ```
 
-Pending migration routes:
+Start (stub):
 
 ```powershell
-curl http://127.0.0.1:45457/migration/pending-routes
+curl -Method POST -Uri http://127.0.0.1:45457/headless/start
 ```
 
-Qidian matcher:
+Stop:
 
 ```powershell
-curl -Method POST -Uri http://127.0.0.1:45457/qidian/match `
-  -ContentType 'application/json' `
-  -Body '{"url":"https://www.qidian.com/book/1010868264/"}'
-```
-
-Session latest state:
-
-```powershell
-curl http://127.0.0.1:45457/session/latest
-```
-
-Session start:
-
-```powershell
-curl -Method POST -Uri http://127.0.0.1:45457/session/start
-```
-
-Session stop:
-
-```powershell
-curl -Method POST -Uri http://127.0.0.1:45457/session/stop
-```
-
-Session target signal:
-
-```powershell
-curl -Method POST -Uri http://127.0.0.1:45457/session/target-signal `
-  -ContentType 'application/json' `
-  -Body '{"waitMs":0,"pollIntervalMs":0}'
-```
-
-
-Android network inspect (non-mutating):
-
-```powershell
-curl -Method POST -Uri http://127.0.0.1:45457/android/network/inspect `
+curl -Method POST -Uri http://127.0.0.1:45457/headless/stop `
   -ContentType 'application/json' `
   -Body '{"deviceId":"emulator-5554"}'
 ```
 
-Android network rescue (stub during migration):
+Recover:
 
 ```powershell
-curl -Method POST -Uri http://127.0.0.1:45457/android/network/rescue
+curl -Method POST -Uri http://127.0.0.1:45457/headless/recover `
+  -ContentType 'application/json' `
+  -Body '{"deviceId":"emulator-5554"}'
 ```
 
-Android network capabilities:
+Capabilities:
 
 ```powershell
-curl http://127.0.0.1:45457/android/network/capabilities
+curl http://127.0.0.1:45457/headless/capabilities
 ```
 
-PowerShell doctor script in addon-server mode:
+Scripts in addon-server mode:
 
 ```powershell
-./scripts/android/doctor-phone-network.ps1 -UseAddonServer -DeviceId emulator-5554
+./scripts/android/stop-headless.ps1 -UseAddonServer -DeviceId emulator-5554
+./scripts/android/recover-headless.ps1 -UseAddonServer -DeviceId emulator-5554
 ```
-
-> `migration-assets/` remains reference-only and is not wired directly into runtime routes.

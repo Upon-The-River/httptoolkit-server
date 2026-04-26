@@ -4,6 +4,9 @@ import { Server } from 'node:http';
 
 import { AndroidNetworkSafetyApi, AndroidNetworkSafetyService } from './android/android-network-safety';
 import { matchQidianTraffic, QidianTrafficMatchResult } from './qidian/qidian-traffic-matcher';
+import { HeadlessControlService } from './headless/headless-control-service';
+import { HeadlessHealthService } from './headless/headless-health-service';
+import { HeadlessControlApi } from './headless/headless-types';
 import {
     LatestSessionState,
     SessionManager,
@@ -26,6 +29,8 @@ export interface CreateAppOptions {
     matchTraffic?: (url: string) => QidianTrafficMatchResult;
     pendingRoutes?: string[];
     androidNetworkSafety?: AndroidNetworkSafetyApi;
+    headlessControl?: HeadlessControlApi;
+    headlessHealth?: HeadlessHealthService;
 }
 
 export const DEFAULT_PENDING_ROUTE_GROUPS = [
@@ -37,7 +42,12 @@ export const DEFAULT_PENDING_ROUTE_GROUPS = [
     'POST /automation/android-adb/recover-headless',
     'POST /automation/android-adb/rescue-network',
     'GET /automation/health',
-    'GET /export/stream'
+    'GET /export/stream',
+    'GET /headless/health',
+    'POST /headless/start',
+    'POST /headless/stop',
+    'POST /headless/recover',
+    'GET /headless/capabilities'
 ];
 
 const asyncHandler = (handler: (req: Request, res: Response, next: NextFunction) => Promise<void>) => {
@@ -52,6 +62,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const matchTraffic = options.matchTraffic ?? matchQidianTraffic;
     const pendingRoutes = options.pendingRoutes ?? DEFAULT_PENDING_ROUTE_GROUPS;
     const androidNetworkSafety = options.androidNetworkSafety ?? new AndroidNetworkSafetyService();
+    const headlessControl = options.headlessControl ?? new HeadlessControlService();
+    const headlessHealth = options.headlessHealth ?? new HeadlessHealthService(headlessControl.getCapabilities());
 
     app.use(express.json({ limit: '5mb' }));
 
@@ -113,6 +125,35 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     app.get('/android/network/capabilities', (_req, res: Response) => {
         res.json(androidNetworkSafety.getCapabilities());
+    });
+
+    app.get('/headless/health', (_req, res: Response) => {
+        res.json(headlessHealth.getHealth());
+    });
+
+    app.post('/headless/start', asyncHandler(async (req: Request, res: Response) => {
+        const deviceId = typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined;
+        const result = await headlessControl.start({ deviceId });
+        headlessHealth.trackAction(result);
+        res.json(result);
+    }));
+
+    app.post('/headless/stop', asyncHandler(async (req: Request, res: Response) => {
+        const deviceId = typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined;
+        const result = await headlessControl.stop({ deviceId });
+        headlessHealth.trackAction(result);
+        res.json(result);
+    }));
+
+    app.post('/headless/recover', asyncHandler(async (req: Request, res: Response) => {
+        const deviceId = typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined;
+        const result = await headlessControl.recover({ deviceId });
+        headlessHealth.trackAction(result);
+        res.json(result);
+    }));
+
+    app.get('/headless/capabilities', (_req, res: Response) => {
+        res.json(headlessControl.getCapabilities());
     });
 
     app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
