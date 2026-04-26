@@ -2,40 +2,71 @@
 
 This is a migration-stage external addon for local Android/headless/Qidian tooling that was previously embedded inside a modified HTTP Toolkit server fork.
 
-## Structure
+## Service slice status
 
-- **Runnable skeleton (`src/`)**
-  - Standalone addon code that is expected to compile now.
-  - Current entrypoint: `src/server.ts`.
-  - Current normalized feature module: `src/qidian/qidian-traffic-matcher.ts`.
-- **Migration assets (`migration-assets/`)**
-  - Legacy files copied from the working fork and preserved for incremental normalization.
-  - These may still import old in-core HTTP Toolkit paths.
-  - They are intentionally excluded from standalone typechecking/compilation.
-- **Reference patches (`core-patches/`)**
-  - Reference material only.
-  - Do not apply automatically to official core files.
+`lab-addon` now runs as a small standalone HTTP service. It focuses on migration-safe utility endpoints and **does not apply any HTTP Toolkit core patches**.
 
-Target principle:
+Migration material under `migration-assets/` is **reference-only** for incremental extraction and normalization. It is not wired into the running addon service.
 
-```text
-official HTTP Toolkit server = clean capture base
-httptoolkit-lab-addon = Android control, network recovery, Qidian matching, live export, operational scripts
-core patches = optional and manually reviewed only
-```
+## Available endpoints
 
-## Run the standalone skeleton
+- `GET /health`
+  - Returns addon process health.
+- `GET /migration/pending-routes`
+  - Lists route groups still pending migration from the old fork.
+- `POST /qidian/match`
+  - JSON input: `{ "url": "..." }`
+  - Returns whether the URL matches Qidian target traffic rules.
+- `GET /session/latest`
+  - Returns the latest `SessionManager` state snapshot.
+- `POST /session/target-signal`
+  - Optional JSON input: `{ "waitMs": 1000, "pollIntervalMs": 200 }`
+  - Returns target traffic observation signal from `SessionManager`.
+
+## Run locally
 
 ```powershell
 cd httptoolkit-lab-addon
 npm install
 npm run typecheck
-npm test  # runs standalone addon test suite
+npm test
 npm run start
 ```
 
-Health check:
+Default bind: `http://127.0.0.1:45457`
+
+## PowerShell curl examples
+
+Health:
 
 ```powershell
 curl http://127.0.0.1:45457/health
+```
+
+Pending migration routes:
+
+```powershell
+curl http://127.0.0.1:45457/migration/pending-routes
+```
+
+Qidian matcher:
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/qidian/match `
+  -ContentType 'application/json' `
+  -Body '{"url":"https://www.qidian.com/book/1010868264/"}'
+```
+
+Session latest state:
+
+```powershell
+curl http://127.0.0.1:45457/session/latest
+```
+
+Session target signal:
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/session/target-signal `
+  -ContentType 'application/json' `
+  -Body '{"waitMs":0,"pollIntervalMs":0}'
 ```
