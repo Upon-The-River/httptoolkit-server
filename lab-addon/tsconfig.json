@@ -13,7 +13,8 @@
   "include": [
     "src/server.ts",
     "src/qidian/**/*.ts",
-    "src/session/**/*.ts"
+    "src/session/**/*.ts",
+    "src/android/**/*.ts"
   ],
   "exclude": [
     "migration-assets/**/*",

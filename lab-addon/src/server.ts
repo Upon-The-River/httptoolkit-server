@@ -1,7 +1,8 @@
-import express, { Express, Request, Response } from 'express';
+import express, { Express, NextFunction, Request, Response } from 'express';
 import { AddressInfo } from 'node:net';
 import { Server } from 'node:http';
 
+import { AndroidNetworkSafetyApi, AndroidNetworkSafetyService } from './android/android-network-safety';
 import { matchQidianTraffic, QidianTrafficMatchResult } from './qidian/qidian-traffic-matcher';
 import {
     LatestSessionState,
@@ -24,6 +25,7 @@ export interface CreateAppOptions {
     sessionManager?: SessionManagerLike;
     matchTraffic?: (url: string) => QidianTrafficMatchResult;
     pendingRoutes?: string[];
+    androidNetworkSafety?: AndroidNetworkSafetyApi;
 }
 
 export const DEFAULT_PENDING_ROUTE_GROUPS = [
@@ -38,11 +40,18 @@ export const DEFAULT_PENDING_ROUTE_GROUPS = [
     'GET /export/stream'
 ];
 
+const asyncHandler = (handler: (req: Request, res: Response, next: NextFunction) => Promise<void>) => {
+    return (req: Request, res: Response, next: NextFunction) => {
+        void handler(req, res, next).catch(next);
+    };
+};
+
 export function createApp(options: CreateAppOptions = {}): Express {
     const app = express();
     const sessionManager = options.sessionManager ?? new SessionManager();
     const matchTraffic = options.matchTraffic ?? matchQidianTraffic;
     const pendingRoutes = options.pendingRoutes ?? DEFAULT_PENDING_ROUTE_GROUPS;
+    const androidNetworkSafety = options.androidNetworkSafety ?? new AndroidNetworkSafetyService();
 
     app.use(express.json({ limit: '5mb' }));
 
@@ -73,22 +82,45 @@ export function createApp(options: CreateAppOptions = {}): Express {
         res.json(sessionManager.getLatestSession());
     });
 
-    app.post('/session/start', async (_req, res: Response) => {
+    app.post('/session/start', asyncHandler(async (_req, res: Response) => {
         const result = await sessionManager.startSessionIfNeeded();
         res.json(result);
-    });
+    }));
 
-    app.post('/session/stop', async (_req, res: Response) => {
+    app.post('/session/stop', asyncHandler(async (_req, res: Response) => {
         const result = await sessionManager.stopLatestSession();
         res.json(result);
-    });
+    }));
 
-    app.post('/session/target-signal', async (req: Request, res: Response) => {
+    app.post('/session/target-signal', asyncHandler(async (req: Request, res: Response) => {
         const waitMs = typeof req.body?.waitMs === 'number' ? req.body.waitMs : undefined;
         const pollIntervalMs = typeof req.body?.pollIntervalMs === 'number' ? req.body.pollIntervalMs : undefined;
 
         const signal = await sessionManager.getTargetTrafficSignal({ waitMs, pollIntervalMs });
         res.json(signal);
+    }));
+
+    app.post('/android/network/inspect', asyncHandler(async (req: Request, res: Response) => {
+        const deviceId = typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined;
+        const report = await androidNetworkSafety.inspectNetwork({ deviceId });
+        res.json(report);
+    }));
+
+    app.post('/android/network/rescue', asyncHandler(async (_req, res: Response) => {
+        const result = await androidNetworkSafety.rescueNetwork();
+        res.json(result);
+    }));
+
+    app.get('/android/network/capabilities', (_req, res: Response) => {
+        res.json(androidNetworkSafety.getCapabilities());
+    });
+
+    app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(500).json({
+            ok: false,
+            error: message
+        });
     });
 
     return app;

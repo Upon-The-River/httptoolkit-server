@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { AddressInfo } from 'node:net';
 import { afterEach, describe, it } from 'node:test';
 
+import { AndroidNetworkSafetyApi } from '../src/android/android-network-safety';
 import { createApp, SessionManagerLike, startServer } from '../src/server';
 import { SessionManager } from '../src/session/session-manager';
 
@@ -29,6 +30,38 @@ async function startTestServer(app = createApp()) {
 
     return { baseUrl };
 }
+
+const baseAndroidSafety: AndroidNetworkSafetyApi = {
+    inspectNetwork: async () => ({
+        ok: true,
+        inspectedAt: '2026-01-01T00:00:00.000Z',
+        deviceId: 'device-1',
+        inspectMode: 'read-only',
+        proxy: {
+            globalHttpProxy: null,
+            globalHttpProxyHost: null,
+            globalHttpProxyPort: null,
+            globalHttpProxyExclusionList: null
+        },
+        privateDns: {
+            mode: null,
+            specifier: null
+        },
+        vpn: {
+            alwaysOnVpnApp: null,
+            lockdownVpn: null,
+            vpnSummary: '',
+            connectivitySummary: '',
+            activeNetworkMentionsVpn: false
+        },
+        warnings: []
+    }),
+    rescueNetwork: async () => ({ ok: false, implemented: false, reason: 'rescue migration pending' }),
+    getCapabilities: () => ({
+        inspect: { implemented: true, mutatesDeviceState: false },
+        rescue: { implemented: false, mutatesDeviceState: false, reason: 'rescue migration pending' }
+    })
+};
 
 describe('lab addon service endpoints', () => {
     it('returns addon health at /health', async () => {
@@ -122,6 +155,29 @@ describe('lab addon service endpoints', () => {
         });
     });
 
+    it('returns stable error JSON when /session/start fails', async () => {
+        const mockedSessionManager: SessionManagerLike = {
+            startSessionIfNeeded: async () => {
+                throw new Error('start failed');
+            },
+            getLatestSession: () => ({ active: false }),
+            stopLatestSession: async () => ({ stopped: false }),
+            getTargetTrafficSignal: async () => ({
+                observed: false,
+                source: 'none',
+                totalSeenRequests: 0,
+                ignoredBootstrapRequests: 0,
+                matchingRequests: 0
+            })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({ sessionManager: mockedSessionManager }));
+
+        const response = await fetch(`${baseUrl}/session/start`, { method: 'POST' });
+        assert.equal(response.status, 500);
+        assert.deepEqual(await response.json(), { ok: false, error: 'start failed' });
+    });
+
     it('stops session at /session/stop using mocked session manager', async () => {
         const mockedSessionManager: SessionManagerLike = {
             startSessionIfNeeded: async () => ({
@@ -145,6 +201,33 @@ describe('lab addon service endpoints', () => {
         const response = await fetch(`${baseUrl}/session/stop`, { method: 'POST' });
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { stopped: true });
+    });
+
+    it('returns stable error JSON when /session/stop fails', async () => {
+        const mockedSessionManager: SessionManagerLike = {
+            startSessionIfNeeded: async () => ({
+                created: false,
+                proxyPort: 9010,
+                sessionUrl: 'http://127.0.0.1:9010'
+            }),
+            getLatestSession: () => ({ active: true, proxyPort: 9010, sessionUrl: 'http://127.0.0.1:9010' }),
+            stopLatestSession: async () => {
+                throw new Error('stop failed');
+            },
+            getTargetTrafficSignal: async () => ({
+                observed: false,
+                source: 'none',
+                totalSeenRequests: 0,
+                ignoredBootstrapRequests: 0,
+                matchingRequests: 0
+            })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({ sessionManager: mockedSessionManager }));
+
+        const response = await fetch(`${baseUrl}/session/stop`, { method: 'POST' });
+        assert.equal(response.status, 500);
+        assert.deepEqual(await response.json(), { ok: false, error: 'stop failed' });
     });
 
     it('returns target signal at /session/target-signal using mocked session manager rule state', async () => {
@@ -173,6 +256,52 @@ describe('lab addon service endpoints', () => {
             ignoredBootstrapRequests: 1,
             matchingRequests: 1,
             sampleUrl: 'https://target-host.example/chapter/list'
+        });
+    });
+
+    it('returns inspect report at /android/network/inspect', async () => {
+        const inspectSafety: AndroidNetworkSafetyApi = {
+            ...baseAndroidSafety,
+            inspectNetwork: async ({ deviceId } = {}) => ({
+                ...(await baseAndroidSafety.inspectNetwork()),
+                deviceId: deviceId ?? 'device-1'
+            })
+        };
+        const { baseUrl } = await startTestServer(createApp({ androidNetworkSafety: inspectSafety }));
+
+        const response = await fetch(`${baseUrl}/android/network/inspect`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'emulator-5554' })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.ok, true);
+        assert.equal(body.deviceId, 'emulator-5554');
+        assert.equal(body.inspectMode, 'read-only');
+    });
+
+    it('returns rescue stub at /android/network/rescue', async () => {
+        const { baseUrl } = await startTestServer(createApp({ androidNetworkSafety: baseAndroidSafety }));
+
+        const response = await fetch(`${baseUrl}/android/network/rescue`, { method: 'POST' });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            ok: false,
+            implemented: false,
+            reason: 'rescue migration pending'
+        });
+    });
+
+    it('returns capabilities at /android/network/capabilities', async () => {
+        const { baseUrl } = await startTestServer(createApp({ androidNetworkSafety: baseAndroidSafety }));
+
+        const response = await fetch(`${baseUrl}/android/network/capabilities`);
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+            inspect: { implemented: true, mutatesDeviceState: false },
+            rescue: { implemented: false, mutatesDeviceState: false, reason: 'rescue migration pending' }
         });
     });
 
