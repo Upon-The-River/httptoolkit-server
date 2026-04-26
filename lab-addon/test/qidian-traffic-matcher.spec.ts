@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 
 import { matchQidianTraffic } from '../src/qidian/qidian-traffic-matcher';
 
@@ -6,7 +7,7 @@ describe('matchQidianTraffic', () => {
     it('matches qidian.com host', () => {
         const result = matchQidianTraffic('https://www.qidian.com/book/123');
 
-        expect(result).toEqual({
+        assert.deepEqual(result, {
             matched: true,
             reason: 'host-match',
             matchedValue: 'qidian.com'
@@ -14,9 +15,16 @@ describe('matchQidianTraffic', () => {
     });
 
     it('matches druidv6.if.qidian.com', () => {
-        const result = matchQidianTraffic('https://druidv6.if.qidian.com/argus/api/v3/bookstore/get-book-detail');
+        const result = matchQidianTraffic(
+            'https://druidv6.if.qidian.com/argus/api/v3/bookstore/get-book-detail',
+            {
+                hostIncludes: ['druidv6.if.qidian.com'],
+                urlIncludes: [],
+                excludeUrlIncludes: []
+            }
+        );
 
-        expect(result).toEqual({
+        assert.deepEqual(result, {
             matched: true,
             reason: 'host-match',
             matchedValue: 'druidv6.if.qidian.com'
@@ -26,7 +34,7 @@ describe('matchQidianTraffic', () => {
     it('excludes android.httptoolkit.tech/config', () => {
         const result = matchQidianTraffic('http://android.httptoolkit.tech/config');
 
-        expect(result).toEqual({
+        assert.deepEqual(result, {
             matched: false,
             reason: 'excluded',
             matchedValue: 'android.httptoolkit.tech/config'
@@ -36,7 +44,7 @@ describe('matchQidianTraffic', () => {
     it('excludes amiusing.httptoolkit.tech/certificate', () => {
         const result = matchQidianTraffic('http://amiusing.httptoolkit.tech/certificate');
 
-        expect(result).toEqual({
+        assert.deepEqual(result, {
             matched: false,
             reason: 'excluded',
             matchedValue: 'amiusing.httptoolkit.tech/certificate'
@@ -46,7 +54,7 @@ describe('matchQidianTraffic', () => {
     it('returns no-match for unrelated URLs', () => {
         const result = matchQidianTraffic('https://example.com/some/api');
 
-        expect(result).toEqual({
+        assert.deepEqual(result, {
             matched: false,
             reason: 'no-match'
         });
