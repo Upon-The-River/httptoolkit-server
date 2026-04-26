@@ -11,6 +11,12 @@
     "rootDir": "src"
   },
   "include": [
-    "src/**/*.ts"
+    "src/server.ts",
+    "src/qidian/**/*.ts",
+    "src/session/**/*.ts"
+  ],
+  "exclude": [
+    "migration-assets/**/*",
+    "test/**/*"
   ]
 }
