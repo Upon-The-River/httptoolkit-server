@@ -5,7 +5,7 @@
   "description": "External addon migration package for Android/headless/Qidian HTTP Toolkit lab features.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.spec.ts",
+    "test": "tsx --test test/qidian-traffic-matcher.spec.ts test/session-manager-target-matcher.spec.ts test/server.spec.ts",
     "start": "tsx src/server.ts"
   },
   "dependencies": {

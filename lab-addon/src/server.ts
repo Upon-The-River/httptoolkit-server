@@ -1,15 +1,26 @@
-import express from 'express';
+import express, { Express, Request, Response } from 'express';
+import { AddressInfo } from 'node:net';
+import { Server } from 'node:http';
 
-const app = express();
-app.use(express.json({ limit: '5mb' }));
+import { matchQidianTraffic, QidianTrafficMatchResult } from './qidian/qidian-traffic-matcher';
+import {
+    LatestSessionState,
+    SessionManager,
+    TargetTrafficSignal
+} from './session/session-manager';
 
-app.get('/health', (_req, res) => {
-    res.json({ ok: true, service: 'httptoolkit-lab-addon' });
-});
+export interface SessionManagerLike {
+    getLatestSession(): LatestSessionState;
+    getTargetTrafficSignal(options?: { waitMs?: number, pollIntervalMs?: number }): Promise<TargetTrafficSignal>;
+}
 
-// Migration target endpoints. Move implementation from the working fork's rest-api.ts here gradually.
-// Keep official HTTP Toolkit core clean. Do not re-add these routes to src/api/rest-api.ts.
-const pendingRoutes = [
+export interface CreateAppOptions {
+    sessionManager?: SessionManagerLike;
+    matchTraffic?: (url: string) => QidianTrafficMatchResult;
+    pendingRoutes?: string[];
+}
+
+export const DEFAULT_PENDING_ROUTE_GROUPS = [
     'POST /automation/session/start',
     'GET /automation/session/latest',
     'POST /automation/session/stop-latest',
@@ -21,11 +32,73 @@ const pendingRoutes = [
     'GET /export/stream'
 ];
 
-app.get('/migration/pending-routes', (_req, res) => {
-    res.json({ pendingRoutes });
-});
+export function createApp(options: CreateAppOptions = {}): Express {
+    const app = express();
+    const sessionManager = options.sessionManager ?? new SessionManager();
+    const matchTraffic = options.matchTraffic ?? matchQidianTraffic;
+    const pendingRoutes = options.pendingRoutes ?? DEFAULT_PENDING_ROUTE_GROUPS;
 
-const port = Number(process.env.HTK_LAB_ADDON_PORT ?? 45457);
-app.listen(port, '127.0.0.1', () => {
-    console.log(`httptoolkit-lab-addon listening on http://127.0.0.1:${port}`);
-});
+    app.use(express.json({ limit: '5mb' }));
+
+    app.get('/health', (_req, res) => {
+        res.json({ ok: true, service: 'httptoolkit-lab-addon' });
+    });
+
+    app.get('/migration/pending-routes', (_req, res) => {
+        res.json({ pendingRoutes });
+    });
+
+    app.post('/qidian/match', (req: Request, res: Response) => {
+        const inputUrl = req.body?.url;
+        if (typeof inputUrl !== 'string' || inputUrl.trim().length === 0) {
+            return res.status(400).json({
+                ok: false,
+                error: 'Expected JSON body: { "url": "https://..." }'
+            });
+        }
+
+        return res.json({
+            url: inputUrl,
+            result: matchTraffic(inputUrl)
+        });
+    });
+
+    app.get('/session/latest', (_req, res) => {
+        res.json(sessionManager.getLatestSession());
+    });
+
+    app.post('/session/target-signal', async (req: Request, res: Response) => {
+        const waitMs = typeof req.body?.waitMs === 'number' ? req.body.waitMs : undefined;
+        const pollIntervalMs = typeof req.body?.pollIntervalMs === 'number' ? req.body.pollIntervalMs : undefined;
+
+        const signal = await sessionManager.getTargetTrafficSignal({ waitMs, pollIntervalMs });
+        res.json(signal);
+    });
+
+    return app;
+}
+
+export async function startServer(options: CreateAppOptions & {
+    port?: number,
+    host?: string
+} = {}): Promise<{ app: Express, server: Server, port: number, host: string }> {
+    const app = createApp(options);
+    const host = options.host ?? '127.0.0.1';
+    const port = options.port ?? Number(process.env.HTK_LAB_ADDON_PORT ?? 45457);
+
+    const server = await new Promise<Server>((resolve) => {
+        const runningServer = app.listen(port, host, () => resolve(runningServer));
+    });
+
+    const boundPort = (server.address() as AddressInfo).port;
+    console.log(`httptoolkit-lab-addon listening on http://${host}:${boundPort}`);
+
+    return { app, server, port: boundPort, host };
+}
+
+if (require.main === module) {
+    startServer().catch((error) => {
+        console.error('Failed to start httptoolkit-lab-addon:', error);
+        process.exit(1);
+    });
+}
