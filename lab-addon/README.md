@@ -49,7 +49,7 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
 
 `GET /migration/status` returns a structured status document:
 
-- `pendingRoutes`: backward-compatible `METHOD /path` strings for non-implemented capabilities.
+- `pendingRoutes`: backward-compatible `METHOD /path` strings for all non-implemented capabilities (`safe-stub`, `pending`, and `requires-core-hook`).
 - `capabilities`: full capability entries with `id`, `method`, `path`, `domain`, `status`, `mutatesDeviceState`, `description`, and `notes`.
 - `summary`: aggregate counts for `implemented`, `safeStub`, `pending`, and `requiresCoreHook`.
 
@@ -61,6 +61,7 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
 - `safe-stub`: intentionally non-mutating no-op behavior until full migration approval.
 - `pending`: planned addon migration item not yet implemented.
 - `requires-core-hook`: addon can document the capability, but complete implementation needs official core integration.
+- `mutatesDeviceState`: indicates Android/device-state mutation specifically, not addon-local session/proxy state changes.
 
 ## Run locally
 

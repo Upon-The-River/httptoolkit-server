@@ -22,5 +22,13 @@ describe('migration status registry', () => {
             'POST /headless/recover',
             'GET /export/stream'
         ]);
+
+        const sessionStart = registry.capabilities.find((capability) => capability.path === '/session/start');
+        const sessionStop = registry.capabilities.find((capability) => capability.path === '/session/stop');
+
+        assert.ok(sessionStart);
+        assert.ok(sessionStop);
+        assert.equal(sessionStart.mutatesDeviceState, false);
+        assert.equal(sessionStop.mutatesDeviceState, false);
     });
 });

@@ -41,9 +41,9 @@ export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
         path: '/session/start',
         domain: 'session',
         status: 'implemented',
-        mutatesDeviceState: true,
+        mutatesDeviceState: false,
         description: 'Starts or reuses a session.',
-        notes: 'May open a proxy session.'
+        notes: 'May mutate addon-side session/proxy state, but does not directly mutate Android device state.'
     },
     {
         id: 'session-stop',
@@ -51,9 +51,9 @@ export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
         path: '/session/stop',
         domain: 'session',
         status: 'implemented',
-        mutatesDeviceState: true,
+        mutatesDeviceState: false,
         description: 'Stops the latest session.',
-        notes: 'May close an active proxy session.'
+        notes: 'May mutate addon-side session/proxy state, but does not directly mutate Android device state.'
     },
     {
         id: 'session-target-signal',
