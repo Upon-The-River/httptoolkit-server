@@ -5,7 +5,7 @@
   "description": "External addon migration package for Android/headless/Qidian HTTP Toolkit lab features.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "tsx --test test/*.spec.ts",
     "start": "tsx src/server.ts"
   },
   "dependencies": {
@@ -17,7 +17,6 @@
     "@types/express": "^4.17.21",
     "@types/node": "^24.10.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
+    "typescript": "^5.9.3"
   }
 }
