@@ -29,6 +29,14 @@ Migration material under `migration-assets/` is **reference-only** for increment
   - Optional JSON input: `{ "waitMs": 1000, "pollIntervalMs": 200 }`
   - Returns target traffic observation signal from `SessionManager`.
 
+- `POST /android/network/inspect`
+  - Optional JSON input: `{ "deviceId": "emulator-5554" }`
+  - Runs a **non-mutating** Android network inspection and returns structured proxy/private DNS/VPN evidence.
+- `POST /android/network/rescue`
+  - Current migration-safe stub response: `{ "ok": false, "implemented": false, "reason": "rescue migration pending" }`.
+- `GET /android/network/capabilities`
+  - Returns implemented vs pending Android network safety actions.
+
 > Note: session endpoints currently manage addon-side Mockttp remote session behavior only.
 
 ## Run locally
@@ -90,3 +98,32 @@ curl -Method POST -Uri http://127.0.0.1:45457/session/target-signal `
   -ContentType 'application/json' `
   -Body '{"waitMs":0,"pollIntervalMs":0}'
 ```
+
+
+Android network inspect (non-mutating):
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/android/network/inspect `
+  -ContentType 'application/json' `
+  -Body '{"deviceId":"emulator-5554"}'
+```
+
+Android network rescue (stub during migration):
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/android/network/rescue
+```
+
+Android network capabilities:
+
+```powershell
+curl http://127.0.0.1:45457/android/network/capabilities
+```
+
+PowerShell doctor script in addon-server mode:
+
+```powershell
+./scripts/android/doctor-phone-network.ps1 -UseAddonServer -DeviceId emulator-5554
+```
+
+> `migration-assets/` remains reference-only and is not wired directly into runtime routes.

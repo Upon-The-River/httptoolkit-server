@@ -1,8 +1,31 @@
 param(
-  [string]$DeviceId
+  [string]$DeviceId,
+  [switch]$UseAddonServer,
+  [string]$AddonServerBaseUrl = 'http://127.0.0.1:45457'
 )
 
 $ErrorActionPreference = 'Continue'
+
+if ($UseAddonServer) {
+  $uri = "$AddonServerBaseUrl/android/network/inspect"
+  $payload = @{}
+  if ($DeviceId) {
+    $payload.deviceId = $DeviceId
+  }
+
+  $jsonBody = if ($payload.Keys.Count -gt 0) { $payload | ConvertTo-Json -Depth 4 } else { '{}' }
+
+  try {
+    $response = Invoke-RestMethod -Method POST -Uri $uri -ContentType 'application/json' -Body $jsonBody
+    $response | ConvertTo-Json -Depth 8
+    if ($response.warnings -and $response.warnings.Count -gt 0) { exit 1 }
+    exit 0
+  } catch {
+    Write-Error "Addon server inspect request failed: $($_.Exception.Message)"
+    exit 1
+  }
+}
+
 
 function Get-OnlineDevices {
   param([string]$Selected)
