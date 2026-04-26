@@ -11,7 +11,7 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
 - **Migration assets (`migration-assets/`)**
   - Legacy files copied from the working fork and preserved for incremental normalization.
   - These may still import old in-core HTTP Toolkit paths.
-  - They are intentionally excluded from standalone typechecking.
+  - They are intentionally excluded from standalone typechecking/compilation.
 - **Reference patches (`core-patches/`)**
   - Reference material only.
   - Do not apply automatically to official core files.
@@ -30,6 +30,7 @@ core patches = optional and manually reviewed only
 cd httptoolkit-lab-addon
 npm install
 npm run typecheck
+npm test
 npm run start
 ```
 
