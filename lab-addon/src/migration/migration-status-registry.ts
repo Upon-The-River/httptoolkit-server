@@ -154,6 +154,46 @@ export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
         mutatesDeviceState: false,
         description: 'Planned live export stream bridge endpoint.',
         notes: 'Requires official core integration hook before addon can fully expose streaming export.'
+    },
+    {
+        id: 'export-capabilities',
+        method: 'GET',
+        path: '/export/capabilities',
+        domain: 'export',
+        status: 'implemented',
+        mutatesDeviceState: false,
+        description: 'Describes addon-side export support and core-hook dependencies.',
+        notes: 'Read-only capability metadata endpoint.'
+    },
+    {
+        id: 'export-targets',
+        method: 'GET',
+        path: '/export/targets',
+        domain: 'export',
+        status: 'implemented',
+        mutatesDeviceState: false,
+        description: 'Returns loaded live export target configuration.',
+        notes: 'Read-only target rules from addon config.'
+    },
+    {
+        id: 'export-match',
+        method: 'POST',
+        path: '/export/match',
+        domain: 'export',
+        status: 'implemented',
+        mutatesDeviceState: false,
+        description: 'Matches synthetic export events against addon target rules.',
+        notes: 'Used for validation/testing without core traffic hooks.'
+    },
+    {
+        id: 'export-ingest',
+        method: 'POST',
+        path: '/export/ingest',
+        domain: 'export',
+        status: 'implemented',
+        mutatesDeviceState: false,
+        description: 'Normalizes synthetic export events into stable JSONL-compatible records.',
+        notes: 'Addon-only ingestion/testing endpoint.'
     }
 ];
 
