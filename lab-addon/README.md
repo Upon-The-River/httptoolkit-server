@@ -15,7 +15,8 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
 ### Generic addon endpoints
 
 - `GET /health`
-- `GET /migration/pending-routes`
+- `GET /migration/pending-routes` (backward-compatible structured response)
+- `GET /migration/status` (full migration status registry)
 - `POST /qidian/match`
 - `GET /session/latest`
 - `POST /session/start`
@@ -44,15 +45,22 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
 - `GET /headless/capabilities`
   - Lists implemented vs pending headless actions.
 
-## Implemented vs stubbed actions
+## Migration status registry
 
-- Implemented:
-  - `GET /headless/health`
-  - `GET /headless/capabilities`
-- Stubbed (safe no-op responses):
-  - `POST /headless/start`
-  - `POST /headless/stop`
-  - `POST /headless/recover`
+`GET /migration/status` returns a structured status document:
+
+- `pendingRoutes`: backward-compatible `METHOD /path` strings for non-implemented capabilities.
+- `capabilities`: full capability entries with `id`, `method`, `path`, `domain`, `status`, `mutatesDeviceState`, `description`, and `notes`.
+- `summary`: aggregate counts for `implemented`, `safeStub`, `pending`, and `requiresCoreHook`.
+
+`GET /migration/pending-routes` now returns the same structured payload to preserve compatibility while exposing richer migration metadata.
+
+### Status meanings
+
+- `implemented`: endpoint behavior is migrated and active.
+- `safe-stub`: intentionally non-mutating no-op behavior until full migration approval.
+- `pending`: planned addon migration item not yet implemented.
+- `requires-core-hook`: addon can document the capability, but complete implementation needs official core integration.
 
 ## Run locally
 
