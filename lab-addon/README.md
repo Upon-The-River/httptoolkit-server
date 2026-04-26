@@ -30,7 +30,7 @@ core patches = optional and manually reviewed only
 cd httptoolkit-lab-addon
 npm install
 npm run typecheck
-npm test
+npm test  # runs standalone vitest suite
 npm run start
 ```
 
