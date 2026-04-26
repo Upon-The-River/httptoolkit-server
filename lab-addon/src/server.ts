@@ -8,6 +8,11 @@ import { HeadlessControlService } from './headless/headless-control-service';
 import { HeadlessHealthService } from './headless/headless-health-service';
 import { HeadlessControlApi } from './headless/headless-types';
 import { buildMigrationStatusRegistry } from './migration/migration-status-registry';
+import { getExportCapabilities } from './export/export-capabilities';
+import { matchExportEvent } from './export/export-event-matcher';
+import { ExportIngestService } from './export/export-ingest-service';
+import { loadExportTargetsConfig } from './export/export-targets';
+import { SyntheticHttpEvent } from './export/export-types';
 import {
     LatestSessionState,
     SessionManager,
@@ -31,6 +36,8 @@ export interface CreateAppOptions {
     androidNetworkSafety?: AndroidNetworkSafetyApi;
     headlessControl?: HeadlessControlApi;
     headlessHealth?: HeadlessHealthService;
+    exportIngestService?: ExportIngestService;
+    exportTargetsLoader?: typeof loadExportTargetsConfig;
 }
 
 
@@ -47,6 +54,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const androidNetworkSafety = options.androidNetworkSafety ?? new AndroidNetworkSafetyService();
     const headlessControl = options.headlessControl ?? new HeadlessControlService();
     const headlessHealth = options.headlessHealth ?? new HeadlessHealthService(headlessControl.getCapabilities());
+    const exportTargetsLoader = options.exportTargetsLoader ?? loadExportTargetsConfig;
+    let exportIngestService = options.exportIngestService;
 
     app.use(express.json({ limit: '5mb' }));
 
@@ -141,6 +150,59 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     app.get('/headless/capabilities', (_req, res: Response) => {
         res.json(headlessControl.getCapabilities());
+    });
+
+    app.get('/export/capabilities', (_req, res: Response) => {
+        res.json(getExportCapabilities());
+    });
+
+    app.get('/export/targets', asyncHandler(async (_req: Request, res: Response) => {
+        const config = await exportTargetsLoader();
+        res.json(config);
+    }));
+
+    app.post('/export/match', asyncHandler(async (req: Request, res: Response) => {
+        const syntheticEvent = req.body?.event as SyntheticHttpEvent;
+        if (!syntheticEvent || typeof syntheticEvent.url !== 'string' || typeof syntheticEvent.method !== 'string' || typeof syntheticEvent.statusCode !== 'number') {
+            res.status(400).json({
+                ok: false,
+                error: 'Expected JSON body: { "event": { "method": "GET", "url": "https://...", "statusCode": 200 } }'
+            });
+            return;
+        }
+
+        const config = await exportTargetsLoader();
+        const result = matchExportEvent(syntheticEvent, config.enabled ? config.targets : []);
+
+        res.json({ ok: true, result });
+    }));
+
+    app.post('/export/ingest', asyncHandler(async (req: Request, res: Response) => {
+        const syntheticEvent = req.body?.event as SyntheticHttpEvent;
+        if (!syntheticEvent || typeof syntheticEvent.url !== 'string' || typeof syntheticEvent.method !== 'string' || typeof syntheticEvent.statusCode !== 'number') {
+            res.status(400).json({
+                ok: false,
+                error: 'Expected JSON body: { "event": { "method": "GET", "url": "https://...", "statusCode": 200 } }'
+            });
+            return;
+        }
+
+        if (!exportIngestService) {
+            const config = await exportTargetsLoader();
+            exportIngestService = new ExportIngestService(config.enabled ? config.targets : []);
+        }
+
+        const normalizedRecord = exportIngestService.ingest(syntheticEvent);
+        res.json({ ok: true, record: normalizedRecord });
+    }));
+
+    app.get('/export/stream', (_req: Request, res: Response) => {
+        res.status(501).json({
+            ok: false,
+            implemented: false,
+            status: 'requires-core-hook',
+            reason: 'Live stream export requires a minimal official HTTP Toolkit core hook.'
+        });
     });
 
     app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

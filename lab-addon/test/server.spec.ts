@@ -3,6 +3,8 @@ import { AddressInfo } from 'node:net';
 import { afterEach, describe, it } from 'node:test';
 
 import { AndroidNetworkSafetyApi } from '../src/android/android-network-safety';
+import { ExportIngestService } from '../src/export/export-ingest-service';
+import { ExportTargetsConfig } from '../src/export/export-types';
 import { createApp, SessionManagerLike, startServer } from '../src/server';
 import { HeadlessControlApi } from '../src/headless/headless-types';
 import { SessionManager } from '../src/session/session-manager';
@@ -92,6 +94,18 @@ const baseAndroidSafety: AndroidNetworkSafetyApi = {
 };
 
 describe('lab addon service endpoints', () => {
+    const stubExportConfig: ExportTargetsConfig = {
+        enabled: true,
+        targets: [
+            {
+                name: 'target-a',
+                methods: ['GET'],
+                urlIncludes: ['example.com'],
+                statusCodes: [200]
+            }
+        ]
+    };
+
     it('returns addon health at /health', async () => {
         const { baseUrl } = await startTestServer();
 
@@ -114,7 +128,7 @@ describe('lab addon service endpoints', () => {
         assert.equal(Array.isArray(body.pendingRoutes), true);
         assert.equal(Array.isArray(body.capabilities), true);
         assert.deepEqual(body.summary, {
-            implemented: 10,
+            implemented: 14,
             safeStub: 4,
             pending: 0,
             requiresCoreHook: 1
@@ -449,5 +463,89 @@ describe('lab addon service endpoints', () => {
             startServer({ host: '127.0.0.1', port: first.port }),
             (error: NodeJS.ErrnoException) => error?.code === 'EADDRINUSE'
         );
+    });
+
+    it('returns export capabilities at /export/capabilities', async () => {
+        const { baseUrl } = await startTestServer();
+
+        const response = await fetch(`${baseUrl}/export/capabilities`);
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.configTargets.implemented, true);
+        assert.equal(body.matcher.implemented, true);
+        assert.equal(body.ingest.implemented, true);
+        assert.equal(body.stream.status, 'requires-core-hook');
+    });
+
+    it('returns configured export targets at /export/targets', async () => {
+        const { baseUrl } = await startTestServer(createApp({
+            exportTargetsLoader: async () => stubExportConfig
+        }));
+
+        const response = await fetch(`${baseUrl}/export/targets`);
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), stubExportConfig);
+    });
+
+    it('matches synthetic events at /export/match', async () => {
+        const { baseUrl } = await startTestServer(createApp({
+            exportTargetsLoader: async () => stubExportConfig
+        }));
+
+        const response = await fetch(`${baseUrl}/export/match`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                event: {
+                    method: 'GET',
+                    url: 'https://example.com/api/books',
+                    statusCode: 200
+                }
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.ok, true);
+        assert.equal(body.result.matched, true);
+        assert.equal(body.result.targetName, 'target-a');
+    });
+
+    it('ingests synthetic events at /export/ingest', async () => {
+        const { baseUrl } = await startTestServer(createApp({
+            exportIngestService: new ExportIngestService(stubExportConfig.targets)
+        }));
+
+        const response = await fetch(`${baseUrl}/export/ingest`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                event: {
+                    timestamp: '2026-01-02T03:04:05.000Z',
+                    method: 'GET',
+                    url: 'https://example.com/api/books',
+                    statusCode: 200,
+                    responseHeaders: { 'content-type': 'application/json' },
+                    responseBody: '{\"ok\":true}'
+                }
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.ok, true);
+        assert.equal(body.record.schemaVersion, 1);
+        assert.equal(body.record.matchedTarget, 'target-a');
+        assert.equal(body.record.contentType, 'application/json');
+    });
+
+    it('keeps /export/stream as requires-core-hook safe stub', async () => {
+        const { baseUrl } = await startTestServer();
+
+        const response = await fetch(`${baseUrl}/export/stream`);
+        assert.equal(response.status, 501);
+        const body = await response.json();
+        assert.equal(body.ok, false);
+        assert.equal(body.status, 'requires-core-hook');
     });
 });

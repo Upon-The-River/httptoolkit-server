@@ -45,6 +45,19 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
 - `GET /headless/capabilities`
   - Lists implemented vs pending headless actions.
 
+### Live export endpoints (addon-owned skeleton)
+
+- `GET /export/capabilities`
+  - Reports addon-side export features implemented today and explicit `requires-core-hook` items.
+- `GET /export/targets`
+  - Returns the loaded `config/live-export-targets.json` target rules.
+- `POST /export/match`
+  - Matches a synthetic HTTP event against target rules.
+- `POST /export/ingest`
+  - Ingests a synthetic HTTP event and returns a normalized JSONL-compatible export record.
+- `GET /export/stream`
+  - Explicit safe stub (`501`) with `requires-core-hook` status until official core provides live traffic event hook.
+
 ## Migration status registry
 
 `GET /migration/status` returns a structured status document:
@@ -62,6 +75,32 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
 - `pending`: planned addon migration item not yet implemented.
 - `requires-core-hook`: addon can document the capability, but complete implementation needs official core integration.
 - `mutatesDeviceState`: indicates Android/device-state mutation specifically, not addon-local session/proxy state changes.
+
+## Live export synthetic event examples
+
+Match only:
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/export/match `
+  -ContentType 'application/json' `
+  -Body '{\"event\":{\"method\":\"GET\",\"url\":\"https://example.com/api/books\",\"statusCode\":200}}'
+```
+
+Ingest normalized record:
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/export/ingest `
+  -ContentType 'application/json' `
+  -Body '{\"event\":{\"timestamp\":\"2026-01-02T03:04:05.000Z\",\"method\":\"GET\",\"url\":\"https://example.com/api/books\",\"statusCode\":200,\"responseHeaders\":{\"content-type\":\"application/json\"},\"responseBody\":\"{\\\"ok\\\":true}\"}}'
+```
+
+Stream status stub:
+
+```powershell
+curl http://127.0.0.1:45457/export/stream
+```
+
+This returns a clear JSON stub indicating that live streaming requires a future minimal official core hook. No official HTTP Toolkit core files were modified for this addon export skeleton.
 
 ## Run locally
 
