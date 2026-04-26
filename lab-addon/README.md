@@ -19,9 +19,17 @@ Migration material under `migration-assets/` is **reference-only** for increment
   - Returns whether the URL matches Qidian target traffic rules.
 - `GET /session/latest`
   - Returns the latest `SessionManager` state snapshot.
+- `POST /session/start`
+  - Starts (or reuses) the addon-side Mockttp remote session lifecycle.
+  - Returns `{ "created": true|false, "proxyPort": number, "sessionUrl": "..." }`.
+- `POST /session/stop`
+  - Stops the latest addon-side Mockttp remote session when present.
+  - Returns `{ "stopped": true|false }`.
 - `POST /session/target-signal`
   - Optional JSON input: `{ "waitMs": 1000, "pollIntervalMs": 200 }`
   - Returns target traffic observation signal from `SessionManager`.
+
+> Note: session endpoints currently manage addon-side Mockttp remote session behavior only.
 
 ## Run locally
 
@@ -61,6 +69,18 @@ Session latest state:
 
 ```powershell
 curl http://127.0.0.1:45457/session/latest
+```
+
+Session start:
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/session/start
+```
+
+Session stop:
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/session/stop
 ```
 
 Session target signal:
