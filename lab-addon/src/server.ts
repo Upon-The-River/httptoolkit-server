@@ -7,6 +7,7 @@ import { matchQidianTraffic, QidianTrafficMatchResult } from './qidian/qidian-tr
 import { HeadlessControlService } from './headless/headless-control-service';
 import { HeadlessHealthService } from './headless/headless-health-service';
 import { HeadlessControlApi } from './headless/headless-types';
+import { buildMigrationStatusRegistry } from './migration/migration-status-registry';
 import {
     LatestSessionState,
     SessionManager,
@@ -27,28 +28,11 @@ export interface SessionManagerLike {
 export interface CreateAppOptions {
     sessionManager?: SessionManagerLike;
     matchTraffic?: (url: string) => QidianTrafficMatchResult;
-    pendingRoutes?: string[];
     androidNetworkSafety?: AndroidNetworkSafetyApi;
     headlessControl?: HeadlessControlApi;
     headlessHealth?: HeadlessHealthService;
 }
 
-export const DEFAULT_PENDING_ROUTE_GROUPS = [
-    'POST /automation/session/start',
-    'GET /automation/session/latest',
-    'POST /automation/session/stop-latest',
-    'POST /automation/android-adb/start-headless',
-    'POST /automation/android-adb/stop-headless',
-    'POST /automation/android-adb/recover-headless',
-    'POST /automation/android-adb/rescue-network',
-    'GET /automation/health',
-    'GET /export/stream',
-    'GET /headless/health',
-    'POST /headless/start',
-    'POST /headless/stop',
-    'POST /headless/recover',
-    'GET /headless/capabilities'
-];
 
 const asyncHandler = (handler: (req: Request, res: Response, next: NextFunction) => Promise<void>) => {
     return (req: Request, res: Response, next: NextFunction) => {
@@ -60,7 +44,6 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const app = express();
     const sessionManager = options.sessionManager ?? new SessionManager();
     const matchTraffic = options.matchTraffic ?? matchQidianTraffic;
-    const pendingRoutes = options.pendingRoutes ?? DEFAULT_PENDING_ROUTE_GROUPS;
     const androidNetworkSafety = options.androidNetworkSafety ?? new AndroidNetworkSafetyService();
     const headlessControl = options.headlessControl ?? new HeadlessControlService();
     const headlessHealth = options.headlessHealth ?? new HeadlessHealthService(headlessControl.getCapabilities());
@@ -72,7 +55,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
     });
 
     app.get('/migration/pending-routes', (_req, res) => {
-        res.json({ pendingRoutes });
+        res.json(buildMigrationStatusRegistry());
+    });
+
+    app.get('/migration/status', (_req, res) => {
+        res.json(buildMigrationStatusRegistry());
     });
 
     app.post('/qidian/match', (req: Request, res: Response) => {

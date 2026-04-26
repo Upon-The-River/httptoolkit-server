@@ -103,6 +103,39 @@ describe('lab addon service endpoints', () => {
         });
     });
 
+
+    it('returns full migration status at /migration/status', async () => {
+        const { baseUrl } = await startTestServer();
+
+        const response = await fetch(`${baseUrl}/migration/status`);
+        assert.equal(response.status, 200);
+
+        const body = await response.json();
+        assert.equal(Array.isArray(body.pendingRoutes), true);
+        assert.equal(Array.isArray(body.capabilities), true);
+        assert.deepEqual(body.summary, {
+            implemented: 10,
+            safeStub: 4,
+            pending: 0,
+            requiresCoreHook: 1
+        });
+
+        assert.equal(body.capabilities.some((entry: { path: string, status: string }) => entry.path === '/qidian/match' && entry.status === 'implemented'), true);
+    });
+
+    it('keeps /migration/pending-routes backward compatible with pendingRoutes list plus richer status metadata', async () => {
+        const { baseUrl } = await startTestServer();
+
+        const response = await fetch(`${baseUrl}/migration/pending-routes`);
+        assert.equal(response.status, 200);
+
+        const body = await response.json();
+        assert.equal(Array.isArray(body.pendingRoutes), true);
+        assert.equal(body.pendingRoutes.includes('POST /headless/start'), true);
+        assert.equal(body.pendingRoutes.includes('GET /export/stream'), true);
+        assert.equal(Array.isArray(body.capabilities), true);
+        assert.equal(typeof body.summary?.safeStub, 'number');
+    });
     it('matches Qidian URLs at /qidian/match', async () => {
         const { baseUrl } = await startTestServer();
 
