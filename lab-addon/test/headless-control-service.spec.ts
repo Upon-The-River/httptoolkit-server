@@ -28,42 +28,57 @@ describe('HeadlessControlService', () => {
         });
     });
 
-    it('runs stop script with addon mode through injected process runner', async () => {
-        const runner = new FakeProcessRunner({ exitCode: 0, stdout: 'stopped', stderr: '' });
-        const service = new HeadlessControlService({
-            processRunner: runner,
-            scriptsRoot: '/tmp/scripts/android',
-            powershellCommand: 'pwsh'
+    it('returns explicit safe stop/recover stubs by default', async () => {
+        const service = new HeadlessControlService({ processRunner: new FakeProcessRunner() });
+
+        const stopResult = await service.stop({ deviceId: 'emulator-5554' });
+        const recoverResult = await service.recover({ deviceId: 'emulator-5554' });
+
+        assert.deepEqual(stopResult, {
+            ok: false,
+            implemented: false,
+            action: 'stop',
+            reason: 'Stop is intentionally stubbed to avoid recursive addon-server script calls.'
         });
 
-        const result = await service.stop({ deviceId: 'emulator-5554' });
-
-        assert.equal(runner.calls.length, 1);
-        assert.equal(runner.calls[0].command, 'pwsh');
-        assert.deepEqual(runner.calls[0].args, [
-            '-NoProfile',
-            '-ExecutionPolicy',
-            'Bypass',
-            '-File',
-            '/tmp/scripts/android/stop-headless.ps1',
-            '-UseAddonServer',
-            '-DeviceId',
-            'emulator-5554'
-        ]);
-        assert.equal(result.ok, true);
-        assert.equal(result.implemented, true);
+        assert.deepEqual(recoverResult, {
+            ok: false,
+            implemented: false,
+            action: 'recover',
+            reason: 'Recover is intentionally stubbed to avoid recursive addon-server script calls.'
+        });
     });
 
-    it('returns failed action output when process exits non-zero', async () => {
-        const runner = new FakeProcessRunner({ exitCode: 1, stdout: '', stderr: 'failed' });
-        const service = new HeadlessControlService({
-            processRunner: runner,
-            scriptsRoot: '/tmp/scripts/android'
-        });
+    it('does not invoke ProcessRunner for stop/recover while stubs (no recursive addon-server script call)', async () => {
+        const runner = new FakeProcessRunner({ exitCode: 0, stdout: 'unexpected', stderr: '' });
+        const service = new HeadlessControlService({ processRunner: runner });
 
-        const result = await service.recover();
-        assert.equal(result.ok, false);
-        assert.equal(result.action, 'recover');
-        assert.equal(result.output?.stderr, 'failed');
+        await service.stop({ deviceId: 'emulator-5554' });
+        await service.recover({ deviceId: 'emulator-5554' });
+
+        assert.equal(runner.calls.length, 0);
+    });
+
+    it('reports stubbed capabilities for start/stop/recover and implemented health', () => {
+        const service = new HeadlessControlService();
+
+        assert.deepEqual(service.getCapabilities(), {
+            health: { implemented: true, mutatesDeviceState: false },
+            start: {
+                implemented: false,
+                mutatesDeviceState: false,
+                reason: 'Addon headless start orchestration is not fully migrated yet.'
+            },
+            stop: {
+                implemented: false,
+                mutatesDeviceState: false,
+                reason: 'Stop is intentionally stubbed to avoid recursive addon-server script calls.'
+            },
+            recover: {
+                implemented: false,
+                mutatesDeviceState: false,
+                reason: 'Recover is intentionally stubbed to avoid recursive addon-server script calls.'
+            }
+        });
     });
 });
