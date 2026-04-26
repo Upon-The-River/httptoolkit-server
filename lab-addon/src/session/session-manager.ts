@@ -1,4 +1,5 @@
 import { getRemote, MockedEndpoint, Mockttp, CompletedRequest } from 'mockttp';
+import { matchQidianTraffic } from '../qidian/qidian-traffic-matcher';
 
 export interface ActiveSessionResult {
     created: boolean;
@@ -44,7 +45,8 @@ export class SessionManager {
             client: {
                 headers: { origin: 'https://app.httptoolkit.tech' }
             }
-        })
+        }),
+        private matchTargetTraffic: (url: string) => boolean = (url: string) => matchQidianTraffic(url).matched
     ) {}
 
     async startSessionIfNeeded(): Promise<ActiveSessionResult> {
@@ -268,12 +270,9 @@ export class SessionManager {
     }
 
     private isTargetBusinessRequest(request: Pick<CompletedRequest, 'url' | 'path'>): boolean {
-        const requestUrl = (request.url || request.path || '').toLowerCase();
+        const requestUrl = request.url || request.path || '';
         if (!requestUrl || this.isBootstrapRequest(request)) return false;
-
-        return requestUrl.includes('qidian.com') ||
-            requestUrl.includes('druidv6') ||
-            requestUrl.includes('qidian');
+        return this.matchTargetTraffic(requestUrl);
     }
 
     private tryParseRequestUrl(request: Pick<CompletedRequest, 'url' | 'path'>): URL | undefined {

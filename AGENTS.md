@@ -68,7 +68,7 @@ For insertion-only tasks:
 ```powershell
 git status
 git diff --stat
-````
+```
 
 For addon code tasks:
 
