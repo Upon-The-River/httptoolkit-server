@@ -99,10 +99,23 @@ const baseAndroidSafety: AndroidNetworkSafetyApi = {
         },
         warnings: []
     }),
-    rescueNetwork: async () => ({ ok: false, implemented: false, reason: 'rescue migration pending' }),
+    rescueNetwork: async (options = {}) => ({
+        ok: true,
+        implemented: true,
+        deviceId: options.deviceId ?? 'device-1',
+        dryRun: options.dryRun ?? true,
+        actions: [],
+        warnings: [],
+        before: await baseAndroidSafety.inspectNetwork({ deviceId: options.deviceId })
+    }),
     getCapabilities: () => ({
         inspect: { implemented: true, mutatesDeviceState: false },
-        rescue: { implemented: false, mutatesDeviceState: false, reason: 'rescue migration pending' }
+        rescue: {
+            implemented: true,
+            mutatesDeviceState: true,
+            defaultDryRun: true,
+            limitations: ['no reboot', 'no app uninstall', 'no VPN app disable', 'high-risk actions skipped']
+        }
     })
 };
 
@@ -141,8 +154,8 @@ describe('lab addon service endpoints', () => {
         assert.equal(Array.isArray(body.pendingRoutes), true);
         assert.equal(Array.isArray(body.capabilities), true);
         assert.deepEqual(body.summary, {
-            implemented: 15,
-            safeStub: 4,
+            implemented: 16,
+            safeStub: 3,
             pending: 0,
             requiresCoreHook: 1
         });
@@ -370,26 +383,65 @@ describe('lab addon service endpoints', () => {
         assert.equal(body.inspectMode, 'read-only');
     });
 
-    it('returns rescue stub at /android/network/rescue', async () => {
+    it('POST /android/network/rescue default request returns dryRun=true and implemented=true', async () => {
         const { baseUrl } = await startTestServer(createApp({ androidNetworkSafety: baseAndroidSafety }));
 
         const response = await fetch(`${baseUrl}/android/network/rescue`, { method: 'POST' });
         assert.equal(response.status, 200);
-        assert.deepEqual(await response.json(), {
-            ok: false,
-            implemented: false,
-            reason: 'rescue migration pending'
-        });
+        const body = await response.json();
+        assert.equal(body.ok, true);
+        assert.equal(body.implemented, true);
+        assert.equal(body.dryRun, true);
     });
 
-    it('returns capabilities at /android/network/capabilities', async () => {
+    it('POST /android/network/rescue dryRun=false executes through fake executor', async () => {
+        const executingSafety: AndroidNetworkSafetyApi = {
+            ...baseAndroidSafety,
+            rescueNetwork: async (options = {}) => ({
+                ok: true,
+                implemented: true,
+                deviceId: options.deviceId ?? 'device-1',
+                dryRun: options.dryRun ?? true,
+                actions: [{
+                    id: 'clear-http-proxy-primary',
+                    description: 'Clear global HTTP proxy setting.',
+                    riskLevel: 'low',
+                    command: 'settings delete global http_proxy',
+                    executed: options.dryRun === false,
+                    skipped: options.dryRun !== false
+                }],
+                warnings: [],
+                before: await baseAndroidSafety.inspectNetwork({ deviceId: options.deviceId }),
+                after: await baseAndroidSafety.inspectNetwork({ deviceId: options.deviceId })
+            })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({ androidNetworkSafety: executingSafety }));
+        const response = await fetch(`${baseUrl}/android/network/rescue`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ dryRun: false })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.dryRun, false);
+        assert.equal(body.actions[0].executed, true);
+    });
+
+    it('GET /android/network/capabilities reflects rescue implemented and default dry-run', async () => {
         const { baseUrl } = await startTestServer(createApp({ androidNetworkSafety: baseAndroidSafety }));
 
         const response = await fetch(`${baseUrl}/android/network/capabilities`);
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), {
             inspect: { implemented: true, mutatesDeviceState: false },
-            rescue: { implemented: false, mutatesDeviceState: false, reason: 'rescue migration pending' }
+            rescue: {
+                implemented: true,
+                mutatesDeviceState: true,
+                defaultDryRun: true,
+                limitations: ['no reboot', 'no app uninstall', 'no VPN app disable', 'high-risk actions skipped']
+            }
         });
     });
 

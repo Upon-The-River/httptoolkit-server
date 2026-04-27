@@ -26,8 +26,19 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
 ### Android network safety endpoints
 
 - `POST /android/network/inspect` (implemented, read-only)
-- `POST /android/network/rescue` (stub)
+- `POST /android/network/rescue` (implemented, explicit conservative rescue)
 - `GET /android/network/capabilities` (implemented)
+
+`/android/network/rescue` defaults to `dryRun: true`, so a blank request only returns a plan and does not execute adb writes.
+Execution requires explicit `dryRun: false` (or `-Execute` in the PowerShell helper script).
+
+Rescue limitations in this slice:
+
+- no reboot
+- no app uninstall
+- no VPN app disable
+- high-risk actions are skipped
+- `clearPrivateDns` and `clearAlwaysOnVpn` are opt-in
 
 ### Headless control endpoints (addon standalone slice)
 
@@ -140,6 +151,32 @@ Default bind: `http://127.0.0.1:45457`
 
 ## PowerShell examples
 
+Android inspect (read-only):
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/android/network/inspect `
+  -ContentType 'application/json' `
+  -Body '{"deviceId":"emulator-5554"}'
+```
+
+Android rescue dry-run (default behavior):
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/android/network/rescue `
+  -ContentType 'application/json' `
+  -Body '{"deviceId":"emulator-5554"}'
+```
+
+Android rescue execute proxy clear only:
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/android/network/rescue `
+  -ContentType 'application/json' `
+  -Body '{"deviceId":"emulator-5554","dryRun":false,"clearHttpProxy":true,"clearPrivateDns":false,"clearAlwaysOnVpn":false}'
+```
+
+> Warning: rescue can mutate Android network settings only when `dryRun` is `false` (or when script mode uses `-Execute`). This slice does **not** reboot, uninstall apps, or disable VPN apps.
+
 Health:
 
 ```powershell
@@ -177,6 +214,8 @@ curl http://127.0.0.1:45457/headless/capabilities
 PowerShell client entrypoints (operator-invoked scripts):
 
 ```powershell
+./scripts/android/rescue-phone-network.ps1 -UseAddonServer -DeviceId emulator-5554
+./scripts/android/rescue-phone-network.ps1 -UseAddonServer -DeviceId emulator-5554 -Execute -ClearHttpProxy
 ./scripts/android/stop-headless.ps1 -UseAddonServer -DeviceId emulator-5554
 ./scripts/android/recover-headless.ps1 -UseAddonServer -DeviceId emulator-5554
 ```

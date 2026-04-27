@@ -117,8 +117,15 @@ export function createApp(options: CreateAppOptions = {}): Express {
         res.json(report);
     }));
 
-    app.post('/android/network/rescue', asyncHandler(async (_req, res: Response) => {
-        const result = await androidNetworkSafety.rescueNetwork();
+    app.post('/android/network/rescue', asyncHandler(async (req: Request, res: Response) => {
+        const result = await androidNetworkSafety.rescueNetwork({
+            deviceId: typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined,
+            dryRun: typeof req.body?.dryRun === 'boolean' ? req.body.dryRun : undefined,
+            clearHttpProxy: typeof req.body?.clearHttpProxy === 'boolean' ? req.body.clearHttpProxy : undefined,
+            clearPrivateDns: typeof req.body?.clearPrivateDns === 'boolean' ? req.body.clearPrivateDns : undefined,
+            clearAlwaysOnVpn: typeof req.body?.clearAlwaysOnVpn === 'boolean' ? req.body.clearAlwaysOnVpn : undefined,
+            includeAfterInspection: typeof req.body?.includeAfterInspection === 'boolean' ? req.body.includeAfterInspection : undefined
+        });
         res.json(result);
     }));
 
