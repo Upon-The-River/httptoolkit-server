@@ -56,3 +56,39 @@ curl -X POST http://127.0.0.1:45457/automation/android-adb/start-headless \
   -H 'content-type: application/json' \
   -d '{"deviceId":"<id>","proxyPort":8000,"enableSocks":false,"allowUnsafeStart":true}'
 ```
+
+
+## Real-device bootstrap validation issue (April 27, 2026)
+
+Observed real-device behavior before this fix:
+
+1. `lab-addon` called the official bridge successfully.
+2. Android app received the ACTIVATE URL.
+3. Proxy validation probes failed (`10.0.2.2`, `10.0.3.2`, LAN timeout; `127.0.0.1:8000` returned `503`).
+4. Local check confirmed plain proxy response was `503` without Android bootstrap rules.
+
+Fix implemented in official bridge flow:
+
+- Added `src/automation/android-bootstrap-rules.ts`.
+- Before `apiModel.activateInterceptor('android-adb', ...)`, bridge now prepares minimal Android bootstrap rules:
+  - `http://android.httptoolkit.tech/config` -> JSON certificate payload.
+  - `http://amiusing.httptoolkit.tech/certificate` -> PEM certificate response.
+  - minimal pass-through fallback rule.
+- Bridge response now includes:
+  - `bootstrapRulesApplied`
+  - `bootstrapResult`
+  - warning: `VPN/data-plane success must be verified separately.`
+
+If bootstrap preparation fails, bridge returns structured failure with error code:
+
+- `android-bootstrap-rules-failed`
+
+PowerShell validation command:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000
+```
+
+Expected outcome after bootstrap preparation: Android bootstrap/certificate validation path should be handled by configured rules (not a raw default `503`).
+
+Control-plane success still does **not** prove VPN/data-plane success; verify Android traffic separately.

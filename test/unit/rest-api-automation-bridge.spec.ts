@@ -52,7 +52,7 @@ describe('Android activation bridge server', () => {
         });
 
         try {
-            const port = server.address().port;
+            const port = (server.address() as any).port;
             const healthResponse = await fetch(`http://127.0.0.1:${port}/automation/health`);
             expect(healthResponse.status).to.equal(404);
         } finally {
@@ -72,7 +72,7 @@ describe('Android activation bridge server', () => {
         });
 
         expect(bridge).to.not.equal(undefined);
-        const port = (bridge!.address() as any).port;
+        const port = ((bridge!.address() as any).port);
 
         try {
             const response = await fetch(`http://127.0.0.1:${port}/automation/health`);
@@ -87,29 +87,45 @@ describe('Android activation bridge server', () => {
         }
     });
 
-    it('POST /automation/android-adb/start-headless activates android-adb interceptor', async () => {
+    it('prepares bootstrap rules before activating android-adb interceptor', async () => {
         process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
         process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
 
-        const activateCalls: any[] = [];
+        const callOrder: string[] = [];
         const bridge = await startAndroidActivationBridgeServer({
             apiModel: {
+                getConfig: async () => ({ certificateContent: 'mock-cert-content' }),
                 getInterceptorMetadata: async () => ({ deviceIds: ['device-1'] }),
                 activateInterceptor: async (id: string, proxyPort: number, options: unknown) => {
-                    activateCalls.push({ id, proxyPort, options });
+                    callOrder.push('activate-interceptor');
+                    expect(id).to.equal('android-adb');
+                    expect(proxyPort).to.equal(9000);
+                    expect(options).to.deep.equal({ deviceId: 'device-1', enableSocks: false });
                     return { success: true, metadata: { activated: true } };
                 }
             } as any,
-            ensureProxyPort: async (requestedProxyPort?: number) => ({
-                proxyPort: requestedProxyPort ?? 9000,
-                session: {
-                    created: !requestedProxyPort,
-                    source: requestedProxyPort ? 'requested' as const : 'created' as const
-                }
+            ensureProxyPort: async () => ({
+                proxyPort: 9000,
+                session: { created: false, source: 'requested' as const },
+                proxySession: {
+                    forGet: (url: string) => ({
+                        thenJson: async () => {
+                            callOrder.push(`rule-json:${url}`);
+                        },
+                        thenReply: async () => {
+                            callOrder.push(`rule-reply:${url}`);
+                        }
+                    }),
+                    forAnyRequest: () => ({
+                        thenPassThrough: async () => {
+                            callOrder.push('rule-pass-through');
+                        }
+                    })
+                } as any
             })
         });
 
-        const port = (bridge!.address() as any).port;
+        const port = ((bridge!.address() as any).port);
 
         try {
             const response = await fetch(`http://127.0.0.1:${port}/automation/android-adb/start-headless`, {
@@ -125,36 +141,54 @@ describe('Android activation bridge server', () => {
             const body = await response.json();
             expect(response.status).to.equal(200);
             expect(body.success).to.equal(true);
-            expect(activateCalls).to.deep.equal([
-                {
-                    id: 'android-adb',
-                    proxyPort: 9000,
-                    options: { deviceId: 'device-1', enableSocks: false }
-                }
+            expect(body.controlPlaneSuccess).to.equal(true);
+            expect(body.bootstrapRulesApplied).to.equal(true);
+            expect(body.bootstrapResult.rules).to.deep.equal([
+                'android-config-certificate-json',
+                'android-certificate-pem',
+                'pass-through-fallback'
+            ]);
+            expect(body.warning).to.equal('VPN/data-plane success must be verified separately.');
+            expect(body.dataPlaneObserved).to.equal(false);
+            expect(callOrder).to.deep.equal([
+                'rule-json:http://android.httptoolkit.tech/config',
+                'rule-reply:http://amiusing.httptoolkit.tech/certificate',
+                'rule-pass-through',
+                'activate-interceptor'
             ]);
         } finally {
             await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
         }
     });
 
-    it('activation failures are returned structurally', async () => {
+    it('returns structured failure if bootstrap setup fails', async () => {
         process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
         process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
 
         const bridge = await startAndroidActivationBridgeServer({
             apiModel: {
+                getConfig: async () => ({ certificateContent: 'mock-cert-content' }),
                 getInterceptorMetadata: async () => ({ deviceIds: ['device-1'] }),
-                activateInterceptor: async () => {
-                    throw new Error('activation-exploded');
-                }
+                activateInterceptor: async () => ({ success: true, metadata: { activated: true } })
             } as any,
             ensureProxyPort: async () => ({
                 proxyPort: 9000,
-                session: { created: false, source: 'requested' as const }
+                session: { created: false, source: 'requested' as const },
+                proxySession: {
+                    forGet: () => ({
+                        thenJson: async () => {
+                            throw new Error('forced-bootstrap-rules-failure');
+                        },
+                        thenReply: async () => undefined
+                    }),
+                    forAnyRequest: () => ({
+                        thenPassThrough: async () => undefined
+                    })
+                } as any
             })
         });
 
-        const port = (bridge!.address() as any).port;
+        const port = ((bridge!.address() as any).port);
 
         try {
             const response = await fetch(`http://127.0.0.1:${port}/automation/android-adb/start-headless`, {
@@ -167,6 +201,55 @@ describe('Android activation bridge server', () => {
             expect(response.status).to.equal(500);
             expect(body.success).to.equal(false);
             expect(body.controlPlaneSuccess).to.equal(false);
+            expect(body.bootstrapRulesApplied).to.equal(false);
+            expect(body.errors).to.deep.equal(['android-bootstrap-rules-failed']);
+            expect(body.warning).to.equal('VPN/data-plane success must be verified separately.');
+        } finally {
+            await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
+        }
+    });
+
+    it('activation failures are returned structurally', async () => {
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
+
+        const bridge = await startAndroidActivationBridgeServer({
+            apiModel: {
+                getConfig: async () => ({ certificateContent: 'mock-cert-content' }),
+                getInterceptorMetadata: async () => ({ deviceIds: ['device-1'] }),
+                activateInterceptor: async () => {
+                    throw new Error('activation-exploded');
+                }
+            } as any,
+            ensureProxyPort: async () => ({
+                proxyPort: 9000,
+                session: { created: false, source: 'requested' as const },
+                proxySession: {
+                    forGet: () => ({
+                        thenJson: async () => undefined,
+                        thenReply: async () => undefined
+                    }),
+                    forAnyRequest: () => ({
+                        thenPassThrough: async () => undefined
+                    })
+                } as any
+            })
+        });
+
+        const port = ((bridge!.address() as any).port);
+
+        try {
+            const response = await fetch(`http://127.0.0.1:${port}/automation/android-adb/start-headless`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ deviceId: 'device-1', proxyPort: 9000 })
+            });
+            const body = await response.json();
+
+            expect(response.status).to.equal(500);
+            expect(body.success).to.equal(false);
+            expect(body.controlPlaneSuccess).to.equal(false);
+            expect(body.bootstrapRulesApplied).to.equal(false);
             expect(body.errors).to.deep.equal(['activation-bridge-internal-error']);
         } finally {
             await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
@@ -174,7 +257,7 @@ describe('Android activation bridge server', () => {
     });
 
     it('contains no qidian-specific logic', () => {
-        const source = fs.readFileSync('src/automation/android-activation-bridge-server.ts', 'utf8').toLowerCase();
-        expect(source).to.not.contain('qidian');
+        const bridgeSource = fs.readFileSync('src/automation/android-activation-bridge-server.ts', 'utf8').toLowerCase();
+        expect(bridgeSource).to.not.contain('qidian');
     });
 });
