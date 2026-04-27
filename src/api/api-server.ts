@@ -45,6 +45,7 @@ export class HttpToolkitServerApi extends events.EventEmitter {
 
     private server: express.Application;
     private bridge: UiOperationBridge;
+    private apiModel: ApiModel;
 
     constructor(
         config: HtkConfig,
@@ -123,7 +124,7 @@ export class HttpToolkitServerApi extends events.EventEmitter {
             });
         }
 
-        const apiModel = new ApiModel(
+        this.apiModel = new ApiModel(
             config,
             interceptors,
             getRuleParamKeys,
@@ -136,8 +137,8 @@ export class HttpToolkitServerApi extends events.EventEmitter {
 
         this.server.use(express.json());
 
-        exposeRestAPI(this.server, apiModel);
-        exposeGraphQLAPI(this.server, apiModel);
+        exposeRestAPI(this.server, this.apiModel);
+        exposeGraphQLAPI(this.server, this.apiModel);
     }
 
     async start() {
@@ -196,6 +197,10 @@ export class HttpToolkitServerApi extends events.EventEmitter {
                 `MCP & remote control will not be available.`
             );
         }
+    }
+
+    getApiModel() {
+        return this.apiModel;
     }
 
 };
