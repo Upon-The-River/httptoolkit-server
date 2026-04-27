@@ -97,8 +97,18 @@ Validate official bridge directly (PowerShell):
 
 ```powershell
 Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:45458/automation/health"
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:45457/automation/android-adb/start-headless" -ContentType "application/json" -Body '{"deviceId":"<id>","proxyPort":8000,"enableSocks":false,"allowUnsafeStart":true}'
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:45458/automation/android-adb/start-headless" -ContentType "application/json" -Body '{"deviceId":"<id>","proxyPort":8000,"enableSocks":false,"allowUnsafeStart":true}'
 ```
+
+Bridge responses now include bootstrap preparation details (`bootstrapRulesApplied`, `bootstrapResult`) and a warning that VPN/data-plane success must be verified separately.
+
+Proxy bootstrap validation check (PowerShell):
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000
+```
+
+After Android bootstrap rule preparation, Android bootstrap validation paths should no longer hit raw default `503` responses.
 
 ### Headless backend strategy
 

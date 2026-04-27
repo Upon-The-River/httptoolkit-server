@@ -1,13 +1,20 @@
 import * as http from 'http';
 import express from 'express';
-import { getRemote } from 'mockttp';
+import { getRemote, Mockttp } from 'mockttp';
 
 import { ApiModel } from '../api/api-model';
+import { AndroidBootstrapResult, prepareAndroidBootstrapRules } from './android-bootstrap-rules';
 
 const DEFAULT_BRIDGE_HOST = '127.0.0.1';
 const DEFAULT_BRIDGE_PORT = 45458;
 
 type BridgeSession = { created: boolean, source: 'requested' | 'created' };
+
+type EnsureProxyPortResult = {
+    proxyPort: number;
+    session: BridgeSession;
+    proxySession?: Pick<Mockttp, 'forGet' | 'forAnyRequest'>;
+};
 
 const parseBridgePort = (rawPort: string | undefined): number => {
     const parsed = Number(rawPort);
@@ -16,23 +23,17 @@ const parseBridgePort = (rawPort: string | undefined): number => {
 
 const isBridgeEnabled = (value: string | undefined): boolean => value === 'true';
 
-async function defaultEnsureProxyPort(requestedProxyPort?: number): Promise<{
-    proxyPort: number,
-    session: BridgeSession
-}> {
-    if (requestedProxyPort) {
-        return {
-            proxyPort: requestedProxyPort,
-            session: { created: false, source: 'requested' }
-        };
-    }
-
+async function defaultEnsureProxyPort(requestedProxyPort?: number): Promise<EnsureProxyPortResult> {
     const session = getRemote({ adminServerUrl: 'http://127.0.0.1:45456' });
-    await session.start();
+    await session.start(requestedProxyPort);
 
     return {
         proxyPort: session.port,
-        session: { created: true, source: 'created' }
+        session: {
+            created: true,
+            source: requestedProxyPort ? 'requested' : 'created'
+        },
+        proxySession: session
     };
 }
 
@@ -60,12 +61,17 @@ const resolveDeviceId = (requestedDeviceId: string | undefined, availableDeviceI
     return { deviceId, errors };
 };
 
+const emptyBootstrapResult = (proxyPort: number): AndroidBootstrapResult => ({
+    applied: false,
+    proxyPort,
+    rules: [],
+    certificateAvailable: false,
+    warnings: []
+});
+
 export async function startAndroidActivationBridgeServer(options: {
     apiModel: ApiModel,
-    ensureProxyPort?: (requestedProxyPort?: number) => Promise<{
-        proxyPort: number,
-        session: BridgeSession
-    }>
+    ensureProxyPort?: (requestedProxyPort?: number) => Promise<EnsureProxyPortResult>
 }): Promise<http.Server | undefined> {
     if (!isBridgeEnabled(process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED)) return;
 
@@ -108,6 +114,8 @@ export async function startAndroidActivationBridgeServer(options: {
                 deviceId,
                 proxyPort: requestedProxyPort ?? 0,
                 controlPlaneSuccess: false,
+                bootstrapRulesApplied: false,
+                bootstrapResult: emptyBootstrapResult(requestedProxyPort ?? 0),
                 session: {
                     active: false,
                     created: false,
@@ -119,6 +127,8 @@ export async function startAndroidActivationBridgeServer(options: {
                         availableDeviceIds
                     }
                 },
+                warning: 'VPN/data-plane success must be verified separately.',
+                dataPlaneObserved: false,
                 errors
             });
             return;
@@ -126,6 +136,40 @@ export async function startAndroidActivationBridgeServer(options: {
 
         try {
             const session = await ensureProxyPort(requestedProxyPort);
+
+            let bootstrapResult: AndroidBootstrapResult;
+            try {
+                bootstrapResult = await prepareAndroidBootstrapRules(
+                    options.apiModel,
+                    session.proxyPort,
+                    { session: session.proxySession }
+                );
+            } catch (error) {
+                res.status(500).send({
+                    success: false,
+                    deviceId,
+                    proxyPort: session.proxyPort,
+                    controlPlaneSuccess: false,
+                    bootstrapRulesApplied: false,
+                    bootstrapResult: emptyBootstrapResult(session.proxyPort),
+                    session: {
+                        active: false,
+                        created: session.session.created,
+                        source: session.session.source
+                    },
+                    activationResult: {
+                        success: false,
+                        metadata: {
+                            error: error instanceof Error ? error.message : String(error)
+                        }
+                    },
+                    warning: 'VPN/data-plane success must be verified separately.',
+                    dataPlaneObserved: false,
+                    errors: ['android-bootstrap-rules-failed']
+                });
+                return;
+            }
+
             const activationResult = await options.apiModel.activateInterceptor(
                 'android-adb',
                 session.proxyPort,
@@ -138,12 +182,16 @@ export async function startAndroidActivationBridgeServer(options: {
                 deviceId,
                 proxyPort: session.proxyPort,
                 controlPlaneSuccess,
+                bootstrapRulesApplied: bootstrapResult.applied,
+                bootstrapResult,
                 session: {
                     active: controlPlaneSuccess,
                     created: session.session.created,
                     source: session.session.source
                 },
                 activationResult,
+                warning: 'VPN/data-plane success must be verified separately.',
+                dataPlaneObserved: false,
                 errors
             });
         } catch (error) {
@@ -152,6 +200,8 @@ export async function startAndroidActivationBridgeServer(options: {
                 deviceId,
                 proxyPort: requestedProxyPort ?? 0,
                 controlPlaneSuccess: false,
+                bootstrapRulesApplied: false,
+                bootstrapResult: emptyBootstrapResult(requestedProxyPort ?? 0),
                 session: {
                     active: false,
                     created: false,
@@ -163,6 +213,8 @@ export async function startAndroidActivationBridgeServer(options: {
                         error: error instanceof Error ? error.message : String(error)
                     }
                 },
+                warning: 'VPN/data-plane success must be verified separately.',
+                dataPlaneObserved: false,
                 errors: [
                     'activation-bridge-internal-error'
                 ]
