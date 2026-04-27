@@ -12,6 +12,7 @@ import { ExportTargetsConfig } from '../src/export/export-types';
 import { createApp, SessionManagerLike, startServer } from '../src/server';
 import { HeadlessControlApi } from '../src/headless/headless-types';
 import { SessionManager } from '../src/session/session-manager';
+import { safeStubStrategy } from '../src/headless/headless-backend-strategy';
 
 const openServers: Array<{ close: () => Promise<void> }> = [];
 const tempDirs: string[] = [];
@@ -52,25 +53,33 @@ const baseHeadlessControl: HeadlessControlApi = {
         ok: false,
         implemented: false,
         action: 'start',
+        backend: safeStubStrategy,
         reason: 'Addon headless start orchestration is not fully migrated yet.'
     }),
     stop: async () => ({
         ok: false,
         implemented: false,
         action: 'stop',
+        backend: safeStubStrategy,
         reason: 'Stop is intentionally stubbed to avoid recursive addon-server script calls.'
     }),
     recover: async () => ({
         ok: false,
         implemented: false,
         action: 'recover',
+        backend: safeStubStrategy,
         reason: 'Recover is intentionally stubbed to avoid recursive addon-server script calls.'
     }),
     getCapabilities: () => ({
         health: { implemented: true, mutatesDeviceState: false },
         start: { implemented: false, mutatesDeviceState: false, reason: 'Addon headless start orchestration is not fully migrated yet.' },
         stop: { implemented: false, mutatesDeviceState: false, reason: 'Stop is intentionally stubbed to avoid recursive addon-server script calls.' },
-        recover: { implemented: false, mutatesDeviceState: false, reason: 'Recover is intentionally stubbed to avoid recursive addon-server script calls.' }
+        recover: { implemented: false, mutatesDeviceState: false, reason: 'Recover is intentionally stubbed to avoid recursive addon-server script calls.' },
+        backend: {
+            active: 'safe-stub',
+            strategies: [safeStubStrategy],
+            startCommandConfigured: false
+        }
     })
 };
 
@@ -469,6 +478,7 @@ describe('lab addon service endpoints', () => {
             ok: false,
             implemented: false,
             action: 'start',
+            backend: safeStubStrategy,
             reason: 'Addon headless start orchestration is not fully migrated yet.'
         });
     });
@@ -511,7 +521,12 @@ describe('lab addon service endpoints', () => {
             health: { implemented: true, mutatesDeviceState: false },
             start: { implemented: false, mutatesDeviceState: false, reason: 'Addon headless start orchestration is not fully migrated yet.' },
             stop: { implemented: false, mutatesDeviceState: false, reason: 'Stop is intentionally stubbed to avoid recursive addon-server script calls.' },
-            recover: { implemented: false, mutatesDeviceState: false, reason: 'Recover is intentionally stubbed to avoid recursive addon-server script calls.' }
+            recover: { implemented: false, mutatesDeviceState: false, reason: 'Recover is intentionally stubbed to avoid recursive addon-server script calls.' },
+            backend: {
+                active: 'safe-stub',
+                strategies: [safeStubStrategy],
+                startCommandConfigured: false
+            }
         });
     });
 
