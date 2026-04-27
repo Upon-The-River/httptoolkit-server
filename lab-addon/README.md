@@ -311,3 +311,38 @@ Addon endpoints **must not** invoke those scripts in `-UseAddonServer` mode, bec
 - Local process backend hardening (safer cross-platform stop semantics).
 - External official CLI backend integration (non-recursive).
 - Minimal core hook, only when addon-only backend is proven insufficient and explicitly approved.
+
+## Real environment validation
+
+Before any official core-hook proposal, run addon-only real-environment validation:
+
+- Runbook: [`docs/REAL_DEVICE_VALIDATION_RUNBOOK.md`](./docs/REAL_DEVICE_VALIDATION_RUNBOOK.md)
+- Smoke script: [`scripts/validate-lab-addon.ps1`](./scripts/validate-lab-addon.ps1)
+
+This validation path is safe by default:
+
+- Android checks are skipped unless `-IncludeAndroid` is provided.
+- Android rescue stays dry-run unless `-ExecuteAndroidRescue` is provided.
+- Headless checks are skipped unless `-IncludeHeadless` is provided.
+- Headless start stays dry-run unless `-ExecuteHeadlessStart` is provided.
+- `/export/stream` is checked as a `requires-core-hook` stub only.
+
+Examples:
+
+```powershell
+# Example 1
+.\scripts\validate-lab-addon.ps1 -SkipNpm
+
+# Example 2
+.\scripts\validate-lab-addon.ps1 -IncludeAndroid -DeviceId <device-id>
+
+# Example 3
+.\scripts\validate-lab-addon.ps1 `
+  -IncludeHeadless `
+  -HeadlessCommand node `
+  -HeadlessArgs "./bin/run","start" `
+  -HeadlessWorkingDir "C:\path\to\official"
+
+# Example 4
+.\scripts\validate-lab-addon.ps1 -PersistExportTest
+```
