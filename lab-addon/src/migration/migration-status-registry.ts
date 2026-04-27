@@ -10,6 +10,47 @@ const headlessUsesLocalProcess = headlessConfig.backend === 'local-process';
 const headlessStartImplementedInRegistry = headlessUsesLocalProcess && Boolean(headlessConfig.startCommand) && headlessConfig.validationErrors.length === 0;
 
 export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
+
+    {
+        id: 'automation-health',
+        method: 'GET',
+        path: '/automation/health',
+        domain: 'automation',
+        status: 'implemented',
+        mutatesDeviceState: false,
+        description: 'Returns latest addon automation health snapshot.',
+        notes: 'Addon-compatible replacement for old working-fork automation health route.'
+    },
+    {
+        id: 'automation-android-adb-start-headless',
+        method: 'POST',
+        path: '/automation/android-adb/start-headless',
+        domain: 'automation',
+        status: 'implemented',
+        mutatesDeviceState: true,
+        description: 'Addon-compatible Android ADB start-headless route with legacy response shape.',
+        notes: 'Replaces old working-fork core route without modifying official core files.'
+    },
+    {
+        id: 'automation-android-adb-stop-headless',
+        method: 'POST',
+        path: '/automation/android-adb/stop-headless',
+        domain: 'automation',
+        status: 'safe-stub',
+        mutatesDeviceState: false,
+        description: 'Conservative stop-headless safe stub endpoint in addon.',
+        notes: 'Avoids script recursion and avoids killing arbitrary processes by default.'
+    },
+    {
+        id: 'automation-android-adb-recover-headless',
+        method: 'POST',
+        path: '/automation/android-adb/recover-headless',
+        domain: 'automation',
+        status: 'safe-stub',
+        mutatesDeviceState: false,
+        description: 'Conservative recover-headless safe stub endpoint in addon.',
+        notes: 'Safe placeholder until approved activation bridge/recovery behavior is implemented.'
+    },
     {
         id: 'addon-health',
         method: 'GET',

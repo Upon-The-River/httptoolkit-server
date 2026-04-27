@@ -10,13 +10,15 @@ describe('migration status registry', () => {
 
         assert.equal(registry.capabilities.length, MIGRATION_CAPABILITIES.length);
         assert.deepEqual(registry.summary, {
-            implemented: 17,
-            safeStub: 3,
+            implemented: 19,
+            safeStub: 5,
             pending: 0,
             requiresCoreHook: 1
         });
 
         assert.deepEqual(registry.pendingRoutes, [
+            'POST /automation/android-adb/stop-headless',
+            'POST /automation/android-adb/recover-headless',
             'POST /headless/start',
             'POST /headless/stop',
             'POST /headless/recover',

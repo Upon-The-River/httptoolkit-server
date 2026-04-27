@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import { AndroidNetworkSafetyApi } from '../src/android/android-network-safety';
+import { AndroidActivationClient } from '../src/automation/android-activation-client';
 import { ExportFileSink } from '../src/export/export-file-sink';
 import { ExportIngestService } from '../src/export/export-ingest-service';
 import { ExportTargetsConfig } from '../src/export/export-types';
@@ -165,8 +166,8 @@ describe('lab addon service endpoints', () => {
         assert.equal(Array.isArray(body.pendingRoutes), true);
         assert.equal(Array.isArray(body.capabilities), true);
         assert.deepEqual(body.summary, {
-            implemented: 17,
-            safeStub: 3,
+            implemented: 19,
+            safeStub: 5,
             pending: 0,
             requiresCoreHook: 1
         });
@@ -217,6 +218,14 @@ describe('lab addon service endpoints', () => {
                 sessionUrl: 'http://127.0.0.1:9001'
             }),
             stopLatestSession: async () => ({ stopped: true }),
+            getObservedTrafficSignal: async () => ({
+                observed: false,
+                bootstrapOnly: false,
+                source: 'none',
+                totalSeenRequests: 0,
+                ignoredBootstrapRequests: 0,
+                matchingRequests: 0
+            }),
             getTargetTrafficSignal: async () => ({
                 observed: false,
                 source: 'none',
@@ -247,6 +256,14 @@ describe('lab addon service endpoints', () => {
             }),
             getLatestSession: () => ({ active: false }),
             stopLatestSession: async () => ({ stopped: false }),
+            getObservedTrafficSignal: async () => ({
+                observed: false,
+                bootstrapOnly: false,
+                source: 'none',
+                totalSeenRequests: 0,
+                ignoredBootstrapRequests: 0,
+                matchingRequests: 0
+            }),
             getTargetTrafficSignal: async () => ({
                 observed: false,
                 source: 'none',
@@ -274,6 +291,14 @@ describe('lab addon service endpoints', () => {
             },
             getLatestSession: () => ({ active: false }),
             stopLatestSession: async () => ({ stopped: false }),
+            getObservedTrafficSignal: async () => ({
+                observed: false,
+                bootstrapOnly: false,
+                source: 'none',
+                totalSeenRequests: 0,
+                ignoredBootstrapRequests: 0,
+                matchingRequests: 0
+            }),
             getTargetTrafficSignal: async () => ({
                 observed: false,
                 source: 'none',
@@ -299,6 +324,14 @@ describe('lab addon service endpoints', () => {
             }),
             getLatestSession: () => ({ active: true, proxyPort: 9010, sessionUrl: 'http://127.0.0.1:9010' }),
             stopLatestSession: async () => ({ stopped: true }),
+            getObservedTrafficSignal: async () => ({
+                observed: false,
+                bootstrapOnly: false,
+                source: 'none',
+                totalSeenRequests: 0,
+                ignoredBootstrapRequests: 0,
+                matchingRequests: 0
+            }),
             getTargetTrafficSignal: async () => ({
                 observed: false,
                 source: 'none',
@@ -326,6 +359,14 @@ describe('lab addon service endpoints', () => {
             stopLatestSession: async () => {
                 throw new Error('stop failed');
             },
+            getObservedTrafficSignal: async () => ({
+                observed: false,
+                bootstrapOnly: false,
+                source: 'none',
+                totalSeenRequests: 0,
+                ignoredBootstrapRequests: 0,
+                matchingRequests: 0
+            }),
             getTargetTrafficSignal: async () => ({
                 observed: false,
                 source: 'none',
@@ -454,6 +495,230 @@ describe('lab addon service endpoints', () => {
                 limitations: ['no reboot', 'no app uninstall', 'no VPN app disable', 'high-risk actions skipped']
             }
         });
+    });
+
+
+
+    const automationSessionManager: SessionManagerLike = {
+        startSessionIfNeeded: async () => ({
+            created: true,
+            proxyPort: 9001,
+            sessionUrl: 'http://127.0.0.1:9001'
+        }),
+        getLatestSession: () => ({ active: true, proxyPort: 9001, sessionUrl: 'http://127.0.0.1:9001' }),
+        stopLatestSession: async () => ({ stopped: true }),
+        getObservedTrafficSignal: async () => ({
+            observed: false,
+            bootstrapOnly: false,
+            source: 'none',
+            totalSeenRequests: 0,
+            ignoredBootstrapRequests: 0,
+            matchingRequests: 0
+        }),
+        getTargetTrafficSignal: async () => ({
+            observed: false,
+            source: 'none',
+            totalSeenRequests: 0,
+            ignoredBootstrapRequests: 0,
+            matchingRequests: 0
+        })
+    };
+
+    it('POST /automation/android-adb/start-headless route exists', async () => {
+        const activationClient: AndroidActivationClient = {
+            activateDeviceCapture: async ({ deviceId, proxyPort }) => ({
+                success: true,
+                details: { deviceId, proxyPort, mode: 'fake-success' }
+            }),
+            stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+            recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({
+            androidNetworkSafety: baseAndroidSafety,
+            automationActivationClient: activationClient,
+            sessionManager: automationSessionManager
+        }));
+
+        const response = await fetch(`${baseUrl}/automation/android-adb/start-headless`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'device-1' })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.success, true);
+        assert.equal(body.controlPlaneSuccess, true);
+        assert.equal(body.deviceId, 'device-1');
+    });
+
+    it('polluted network baseline + allowUnsafeStart=false returns success=false', async () => {
+        const pollutedSafety: AndroidNetworkSafetyApi = {
+            ...baseAndroidSafety,
+            inspectNetwork: async () => ({
+                ...(await baseAndroidSafety.inspectNetwork()),
+                warnings: ['Proxy settings are configured.']
+            })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({ androidNetworkSafety: pollutedSafety, sessionManager: automationSessionManager }));
+
+        const response = await fetch(`${baseUrl}/automation/android-adb/start-headless`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'device-1', allowUnsafeStart: false })
+        });
+
+        assert.equal(response.status, 409);
+        const body = await response.json();
+        assert.equal(body.success, false);
+        assert.equal(body.errors[0].code, 'network-baseline-polluted');
+    });
+
+    it('polluted network baseline + allowUnsafeStart=true continues', async () => {
+        const pollutedSafety: AndroidNetworkSafetyApi = {
+            ...baseAndroidSafety,
+            inspectNetwork: async () => ({
+                ...(await baseAndroidSafety.inspectNetwork()),
+                warnings: ['Proxy settings are configured.']
+            })
+        };
+
+        const activationClient: AndroidActivationClient = {
+            activateDeviceCapture: async () => ({ success: true, details: { mode: 'continued-unsafe' } }),
+            stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+            recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({
+            androidNetworkSafety: pollutedSafety,
+            automationActivationClient: activationClient,
+            sessionManager: automationSessionManager
+        }));
+
+        const response = await fetch(`${baseUrl}/automation/android-adb/start-headless`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'device-1', allowUnsafeStart: true })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.success, true);
+    });
+
+    it('fake activation failure returns success=false and errors', async () => {
+        const activationClient: AndroidActivationClient = {
+            activateDeviceCapture: async () => ({ success: false, details: { mode: 'fake-failure' }, errors: ['activation-failed'] }),
+            stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+            recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({
+            androidNetworkSafety: baseAndroidSafety,
+            automationActivationClient: activationClient,
+            sessionManager: automationSessionManager
+        }));
+
+        const response = await fetch(`${baseUrl}/automation/android-adb/start-headless`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'device-1' })
+        });
+
+        assert.equal(response.status, 409);
+        const body = await response.json();
+        assert.equal(body.success, false);
+        assert.equal(body.errors[0].code, 'activation-failed');
+    });
+
+    it('GET /automation/health returns latest health snapshot', async () => {
+        const activationClient: AndroidActivationClient = {
+            activateDeviceCapture: async () => ({ success: true, details: { mode: 'health-check' } }),
+            stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+            recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({
+            androidNetworkSafety: baseAndroidSafety,
+            automationActivationClient: activationClient,
+            sessionManager: automationSessionManager
+        }));
+
+        await fetch(`${baseUrl}/automation/android-adb/start-headless`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'device-1' })
+        });
+
+        const response = await fetch(`${baseUrl}/automation/health`);
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.success, true);
+        assert.equal(body.health.lastRoute, 'POST /automation/android-adb/start-headless');
+    });
+
+    it('stop-headless returns safe-stub or fake stop response', async () => {
+        const activationClient: AndroidActivationClient = {
+            activateDeviceCapture: async () => ({ success: true, details: {} }),
+            stopDeviceCapture: async ({ deviceId }) => ({
+                success: false,
+                implemented: false,
+                safeStub: true,
+                details: { reason: 'safe-stub-stop', deviceId },
+                errors: ['safe-stub-stop-not-implemented']
+            }),
+            recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({
+            androidNetworkSafety: baseAndroidSafety,
+            automationActivationClient: activationClient,
+            sessionManager: automationSessionManager
+        }));
+
+        const response = await fetch(`${baseUrl}/automation/android-adb/stop-headless`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'device-1' })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.safeStub, true);
+        assert.equal(body.action, 'stop-headless');
+    });
+
+    it('recover-headless returns safe-stub or fake recover response', async () => {
+        const activationClient: AndroidActivationClient = {
+            activateDeviceCapture: async () => ({ success: true, details: {} }),
+            stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+            recoverDeviceCapture: async ({ deviceId }) => ({
+                success: false,
+                implemented: false,
+                safeStub: true,
+                details: { reason: 'safe-stub-recover', deviceId },
+                errors: ['safe-stub-recover-not-implemented']
+            })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({
+            androidNetworkSafety: baseAndroidSafety,
+            automationActivationClient: activationClient,
+            sessionManager: automationSessionManager
+        }));
+
+        const response = await fetch(`${baseUrl}/automation/android-adb/recover-headless`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'device-1' })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.safeStub, true);
+        assert.equal(body.action, 'recover-headless');
     });
 
 
