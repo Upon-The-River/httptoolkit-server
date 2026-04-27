@@ -47,6 +47,9 @@ Rescue limitations in this slice:
 
 Behavior summary:
 
+- Tries official bridge activation first:
+  - `POST ${LAB_ADDON_OFFICIAL_ADMIN_BASE_URL:-http://127.0.0.1:45456}/automation/android-adb/start-headless`
+  - If default `45456` route is missing (`404`), addon also attempts `http://127.0.0.1:45457/automation/android-adb/start-headless` for compatibility.
 - Verifies the requested `deviceId` is online in `adb devices` output.
 - Collects basic device info (`ro.product.model`, `ro.build.version.release`).
 - Sends HTTP Toolkit Android ACTIVATE intent via ADB shell:
@@ -60,9 +63,15 @@ Behavior summary:
 
 Current limitations:
 
-- Addon-only mode does not include the full official-core Android bridge (reverse tunnel lifecycle, certificate bridge, and full handshake confirmation path).
-- Therefore, the route can return a structured partial failure (`success=false`, `implemented=true`, `partial=true`) when intent dispatch succeeds but full connected-state confirmation is unavailable.
+- If the official bridge returns structured failure, addon surfaces that failure in `activationResult`.
+- If no official bridge route exists, addon falls back to conservative ADB-intent mode and can return a structured partial failure (`success=false`, `implemented=true`, `partial=true`).
 - No reboot, uninstall, VPN-app-disable, or arbitrary process-kill behavior is used.
+
+Official bridge base URL environment variable:
+
+- `LAB_ADDON_OFFICIAL_ADMIN_BASE_URL`
+  - default: `http://127.0.0.1:45456`
+  - set this to override where addon sends official bridge activation requests.
 
 Expected PowerShell request:
 
@@ -76,6 +85,12 @@ Check automation health (includes `activationMode`):
 
 ```powershell
 curl http://127.0.0.1:45457/automation/health
+```
+
+Validate official bridge directly (PowerShell):
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:45457/automation/android-adb/start-headless" -ContentType "application/json" -Body '{"deviceId":"<id>","proxyPort":8000,"enableSocks":false,"allowUnsafeStart":true}'
 ```
 
 ### Headless backend strategy
