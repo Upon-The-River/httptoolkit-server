@@ -20,9 +20,15 @@ export interface ProcessKillResult {
     reason?: string;
 }
 
+export interface ProcessRunnerCapabilities {
+    spawnDetached: { implemented: boolean };
+    kill: { implemented: boolean; reason?: string };
+}
+
 export interface ProcessRunner {
     spawnDetached(request: DetachedSpawnRequest): Promise<DetachedSpawnResult>;
     kill?(processId: number): Promise<ProcessKillResult>;
+    getCapabilities?(): ProcessRunnerCapabilities;
 }
 
 export interface HeadlessActionCapability {

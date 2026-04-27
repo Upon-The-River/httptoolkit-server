@@ -51,6 +51,14 @@ Headless control uses an explicit backend strategy model:
 
 Default behavior remains `safe-stub` unless explicitly configured.
 
+Important semantics:
+
+- Backend strategy availability (`local-process`) does **not** imply every action is implemented.
+- Local-process `start` can be implemented while `stop`/`recover` remain conservative.
+- The production `NodeProcessRunner` currently does **not** implement safe cross-platform process kill.
+- `stop`/`recover` remain non-action stubs unless the configured process runner explicitly reports kill support.
+- `GET /headless/capabilities` is the runtime source of truth for action-level availability.
+
 Safety guarantees:
 
 - The addon process registry tracks **only addon-started processes**.
@@ -63,16 +71,18 @@ Safety guarantees:
 - `GET /headless/health`
   - Returns addon-side headless service health summary.
 - `POST /headless/start`
-  - Safe explicit stub until full start orchestration is migrated.
-  - Returns `implemented: false` with reason.
+  - Default safe stub unless local-process backend + start command are configured.
+  - Can return `implemented: true` independently of stop/recover support.
 - `POST /headless/stop`
   - Safe explicit no-op by default.
-  - If local-process backend is enabled, only addon-registered process stop is attempted.
+  - Requires a runner that explicitly reports kill capability as implemented.
+  - Local-process backend alone is insufficient to mark stop as implemented.
 - `POST /headless/recover`
   - Safe explicit no-op by default.
-  - If local-process backend is enabled and safe stop/start are available, recover composes local stop + local start without recursion.
+  - Implemented only when both start and stop are implemented.
+  - If stop is unavailable, recover returns a structured non-action result.
 - `GET /headless/capabilities`
-  - Lists implemented vs pending headless actions.
+  - Runtime source of truth for implemented vs pending headless actions.
 
 ### Live export endpoints (addon-owned skeleton)
 

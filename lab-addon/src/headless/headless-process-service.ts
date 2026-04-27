@@ -3,11 +3,22 @@ import { spawn } from 'node:child_process';
 import {
     DetachedSpawnRequest,
     DetachedSpawnResult,
+    ProcessRunnerCapabilities,
     ProcessKillResult,
     ProcessRunner
 } from './headless-types';
 
 export class NodeProcessRunner implements ProcessRunner {
+    getCapabilities(): ProcessRunnerCapabilities {
+        return {
+            spawnDetached: { implemented: true },
+            kill: {
+                implemented: false,
+                reason: 'Safe cross-platform process termination is not implemented in NodeProcessRunner yet.'
+            }
+        };
+    }
+
     async spawnDetached(request: DetachedSpawnRequest): Promise<DetachedSpawnResult> {
         return new Promise((resolve) => {
             try {
@@ -47,7 +58,7 @@ export class NodeProcessRunner implements ProcessRunner {
         return {
             ok: false,
             implemented: false,
-            reason: 'Safe cross-platform process termination is not implemented in NodeProcessRunner yet.'
+            reason: this.getCapabilities().kill.reason
         };
     }
 }

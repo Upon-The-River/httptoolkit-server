@@ -10,6 +10,7 @@ import {
     HeadlessActionResult,
     HeadlessCapabilities,
     HeadlessControlApi,
+    ProcessRunnerCapabilities,
     ProcessRunner
 } from './headless-types';
 
@@ -23,6 +24,7 @@ const START_STUB_REASON = 'Addon headless start orchestration is not fully migra
 const STOP_STUB_REASON = 'Stop is intentionally stubbed to avoid recursive addon-server script calls.';
 const RECOVER_STUB_REASON = 'Recover is intentionally stubbed to avoid recursive addon-server script calls.';
 const NO_REGISTERED_PROCESS_REASON = 'No addon-started headless process is registered.';
+const RUNNER_KILL_NOT_IMPLEMENTED_REASON = 'Configured process runner does not implement safe process kill.';
 
 export class HeadlessControlService implements HeadlessControlApi {
     private readonly processRunner: ProcessRunner;
@@ -119,13 +121,25 @@ export class HeadlessControlService implements HeadlessControlApi {
             };
         }
 
+        const runnerCapabilities = this.getProcessRunnerCapabilities();
+        if (!runnerCapabilities.kill.implemented) {
+            return {
+                ok: false,
+                implemented: false,
+                action: 'stop',
+                backend: localProcessStrategy,
+                reason: runnerCapabilities.kill.reason ?? RUNNER_KILL_NOT_IMPLEMENTED_REASON,
+                process: latest
+            };
+        }
+
         if (!this.processRunner.kill) {
             return {
                 ok: false,
                 implemented: false,
                 action: 'stop',
                 backend: localProcessStrategy,
-                reason: 'Process kill is not available in the configured process runner.',
+                reason: RUNNER_KILL_NOT_IMPLEMENTED_REASON,
                 process: latest
             };
         }
@@ -154,13 +168,24 @@ export class HeadlessControlService implements HeadlessControlApi {
     }
 
     async recover(): Promise<HeadlessActionResult> {
-        if (this.config.backend !== 'local-process' || !this.config.startCommand) {
+        const capabilities = this.getCapabilities();
+        if (!capabilities.start.implemented) {
             return {
                 ok: false,
                 implemented: false,
                 action: 'recover',
                 backend: safeStubStrategy,
-                reason: RECOVER_STUB_REASON
+                reason: capabilities.recover.reason ?? RECOVER_STUB_REASON
+            };
+        }
+
+        if (!capabilities.stop.implemented) {
+            return {
+                ok: false,
+                implemented: false,
+                action: 'recover',
+                backend: localProcessStrategy,
+                reason: capabilities.recover.reason ?? 'Recover is unavailable because stop is not implemented.'
             };
         }
 
@@ -201,10 +226,18 @@ export class HeadlessControlService implements HeadlessControlApi {
         const activeStrategy = this.config.backend === 'local-process' && this.config.startCommand
             ? localProcessStrategy
             : safeStubStrategy;
+        const runnerCapabilities = this.getProcessRunnerCapabilities();
 
         const startImplemented = activeStrategy.kind === 'local-process';
-        const stopImplemented = activeStrategy.kind === 'local-process' && Boolean(this.processRunner.kill);
+        const stopImplemented = activeStrategy.kind === 'local-process' && runnerCapabilities.kill.implemented;
         const recoverImplemented = startImplemented && stopImplemented;
+
+        const stopReason = activeStrategy.kind !== 'local-process'
+            ? STOP_STUB_REASON
+            : (runnerCapabilities.kill.reason ?? RUNNER_KILL_NOT_IMPLEMENTED_REASON);
+        const recoverReason = !startImplemented
+            ? RECOVER_STUB_REASON
+            : (stopImplemented ? undefined : `Recover is unavailable because stop is not implemented. ${stopReason}`);
 
         return {
             health: { implemented: true, mutatesDeviceState: false },
@@ -216,17 +249,29 @@ export class HeadlessControlService implements HeadlessControlApi {
             stop: {
                 implemented: stopImplemented,
                 mutatesDeviceState: false,
-                ...(stopImplemented ? {} : { reason: STOP_STUB_REASON })
+                ...(stopImplemented ? {} : { reason: stopReason })
             },
             recover: {
                 implemented: recoverImplemented,
                 mutatesDeviceState: false,
-                ...(recoverImplemented ? {} : { reason: RECOVER_STUB_REASON })
+                ...(recoverImplemented ? {} : { reason: recoverReason ?? RECOVER_STUB_REASON })
             },
             backend: {
                 active: activeStrategy.kind,
                 strategies: allHeadlessBackendStrategies,
                 startCommandConfigured: Boolean(this.config.startCommand)
+            }
+        };
+    }
+
+    private getProcessRunnerCapabilities(): ProcessRunnerCapabilities {
+        const declaredCapabilities = this.processRunner.getCapabilities?.();
+
+        return {
+            spawnDetached: declaredCapabilities?.spawnDetached ?? { implemented: true },
+            kill: declaredCapabilities?.kill ?? {
+                implemented: false,
+                reason: RUNNER_KILL_NOT_IMPLEMENTED_REASON
             }
         };
     }
