@@ -7,10 +7,12 @@ import {
 } from '../src/headless/headless-backend-strategy';
 import { HeadlessConfig } from '../src/headless/headless-config';
 import { HeadlessControlService } from '../src/headless/headless-control-service';
+import { NodeProcessRunner } from '../src/headless/headless-process-service';
 import { HeadlessProcessRegistry } from '../src/headless/headless-process-registry';
 import {
     DetachedSpawnRequest,
     DetachedSpawnResult,
+    ProcessRunnerCapabilities,
     ProcessKillResult,
     ProcessRunner
 } from '../src/headless/headless-types';
@@ -21,7 +23,11 @@ class FakeProcessRunner implements ProcessRunner {
 
     constructor(
         private readonly spawnResult: DetachedSpawnResult = { ok: true, processId: 4321 },
-        private readonly killResult: ProcessKillResult = { ok: true, implemented: true }
+        private readonly killResult: ProcessKillResult = { ok: true, implemented: true },
+        private readonly capabilities: ProcessRunnerCapabilities = {
+            spawnDetached: { implemented: true },
+            kill: { implemented: true }
+        }
     ) {}
 
     async spawnDetached(request: DetachedSpawnRequest): Promise<DetachedSpawnResult> {
@@ -32,6 +38,10 @@ class FakeProcessRunner implements ProcessRunner {
     async kill(processId: number): Promise<ProcessKillResult> {
         this.killCalls.push(processId);
         return this.killResult;
+    }
+
+    getCapabilities(): ProcessRunnerCapabilities {
+        return this.capabilities;
     }
 }
 
@@ -106,6 +116,18 @@ describe('HeadlessProcessRegistry', () => {
 });
 
 describe('HeadlessControlService', () => {
+    it('NodeProcessRunner declares kill as not implemented', () => {
+        const runner = new NodeProcessRunner();
+        const capabilities = runner.getCapabilities();
+
+        assert.ok(capabilities);
+        assert.equal(capabilities.kill.implemented, false);
+        assert.equal(
+            capabilities.kill.reason,
+            'Safe cross-platform process termination is not implemented in NodeProcessRunner yet.'
+        );
+    });
+
     it('start returns safe-stub by default', async () => {
         const service = new HeadlessControlService();
 
@@ -176,6 +198,80 @@ describe('HeadlessControlService', () => {
         assert.equal(runner.spawnCalls.length, 1);
         assert.equal(JSON.stringify(runner.spawnCalls).includes('/headless/start'), false);
         assert.equal(JSON.stringify(runner.spawnCalls).includes('-UseAddonServer'), false);
+    });
+
+    it('local-process capabilities with default NodeProcessRunner only implement start', () => {
+        const service = new HeadlessControlService({
+            config: localConfig,
+            processRunner: new NodeProcessRunner(),
+            processRegistry: new HeadlessProcessRegistry()
+        });
+
+        const capabilities = service.getCapabilities();
+        assert.equal(capabilities.start.implemented, true);
+        assert.equal(capabilities.stop.implemented, false);
+        assert.equal(capabilities.recover.implemented, false);
+    });
+
+    it('local-process capabilities with kill-capable fake runner implement start/stop/recover', () => {
+        const service = new HeadlessControlService({
+            config: localConfig,
+            processRunner: new FakeProcessRunner(),
+            processRegistry: new HeadlessProcessRegistry()
+        });
+
+        const capabilities = service.getCapabilities();
+        assert.equal(capabilities.start.implemented, true);
+        assert.equal(capabilities.stop.implemented, true);
+        assert.equal(capabilities.recover.implemented, true);
+    });
+
+    it('stop does not call kill when runner capability reports kill as not implemented', async () => {
+        const runner = new FakeProcessRunner(
+            { ok: true, processId: 4444 },
+            { ok: true, implemented: true },
+            {
+                spawnDetached: { implemented: true },
+                kill: { implemented: false, reason: 'kill intentionally unavailable in this runner' }
+            }
+        );
+        const service = new HeadlessControlService({
+            config: localConfig,
+            processRunner: runner,
+            processRegistry: new HeadlessProcessRegistry()
+        });
+
+        await service.start();
+        const result = await service.stop();
+
+        assert.equal(result.ok, false);
+        assert.equal(result.implemented, false);
+        assert.equal(result.reason, 'kill intentionally unavailable in this runner');
+        assert.equal(runner.killCalls.length, 0);
+    });
+
+    it('recover does not call stop/start when stop is unavailable', async () => {
+        const runner = new FakeProcessRunner(
+            { ok: true, processId: 5555 },
+            { ok: true, implemented: true },
+            {
+                spawnDetached: { implemented: true },
+                kill: { implemented: false, reason: 'kill unavailable for recovery' }
+            }
+        );
+        const service = new HeadlessControlService({
+            config: localConfig,
+            processRunner: runner,
+            processRegistry: new HeadlessProcessRegistry()
+        });
+
+        const result = await service.recover();
+
+        assert.equal(result.ok, false);
+        assert.equal(result.implemented, false);
+        assert.equal(result.reason?.includes('stop is not implemented'), true);
+        assert.equal(runner.spawnCalls.length, 0);
+        assert.equal(runner.killCalls.length, 0);
     });
 
     it('capabilities include backend strategy information', () => {
