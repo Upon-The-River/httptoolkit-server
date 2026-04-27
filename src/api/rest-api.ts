@@ -11,6 +11,7 @@ import type {
 } from 'express-serve-static-core';
 import type { ParsedQs } from 'qs';
 import { ErrorLike, StatusError } from '@httptoolkit/util';
+import { getRemote } from 'mockttp';
 
 import { logError } from '../error-tracking';
 import { ApiModel } from './api-model';
@@ -25,8 +26,16 @@ import * as Client from '../client/client-types';
 
 export function exposeRestAPI(
     server: ExpressApp,
-    apiModel: ApiModel
+    apiModel: ApiModel,
+    options: {
+        ensureProxyPort?: (requestedProxyPort?: number) => Promise<{
+            proxyPort: number,
+            session: { created: boolean, source: 'requested' | 'created' }
+        }>
+    } = {}
 ) {
+    const ensureProxyPort = options.ensureProxyPort ?? defaultEnsureProxyPort;
+
     server.get('/version', handleErrors((_req, res) => {
         res.send({ version: apiModel.getVersion() });
     }));
@@ -95,6 +104,92 @@ export function exposeRestAPI(
         res.json({ result });
     }));
 
+    server.get('/automation/health', handleErrors(async (_req, res) => {
+        res.send({
+            success: true,
+            bridge: {
+                available: true,
+                routes: [
+                    'GET /automation/health',
+                    'POST /automation/android-adb/start-headless'
+                ]
+            }
+        });
+    }));
+
+    server.post('/automation/android-adb/start-headless', handleErrors(async (req, res) => {
+        const errors: string[] = [];
+        const requestedDeviceId = typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined;
+        const requestedProxyPort = typeof req.body?.proxyPort === 'number'
+            ? req.body.proxyPort
+            : undefined;
+        const enableSocks = req.body?.enableSocks === true;
+
+        const metadata = await apiModel.getInterceptorMetadata('android-adb', 'detailed') as
+            | { deviceIds?: string[] }
+            | undefined;
+        const availableDeviceIds = metadata?.deviceIds ?? [];
+
+        let deviceId = requestedDeviceId;
+        if (!deviceId && availableDeviceIds.length === 1) {
+            deviceId = availableDeviceIds[0];
+        }
+
+        if (!deviceId) {
+            errors.push(
+                availableDeviceIds.length > 1
+                    ? 'multiple-devices-connected-specify-deviceid'
+                    : 'no-android-devices-connected'
+            );
+        } else if (!availableDeviceIds.includes(deviceId)) {
+            errors.push('unknown-deviceid');
+        }
+
+        if (errors.length) {
+            res.status(409).send({
+                success: false,
+                deviceId,
+                proxyPort: requestedProxyPort ?? 0,
+                controlPlaneSuccess: false,
+                session: {
+                    active: false,
+                    created: false,
+                    source: 'requested'
+                },
+                activationResult: {
+                    success: false,
+                    metadata: {
+                        availableDeviceIds
+                    }
+                },
+                errors
+            });
+            return;
+        }
+
+        const session = await ensureProxyPort(requestedProxyPort);
+        const activationResult = await apiModel.activateInterceptor(
+            'android-adb',
+            session.proxyPort,
+            { deviceId, enableSocks }
+        ) as { success: boolean, metadata?: unknown };
+
+        const controlPlaneSuccess = activationResult.success === true;
+        res.send({
+            success: controlPlaneSuccess,
+            deviceId,
+            proxyPort: session.proxyPort,
+            controlPlaneSuccess,
+            session: {
+                active: controlPlaneSuccess,
+                created: session.session.created,
+                source: session.session.source
+            },
+            activationResult,
+            errors
+        });
+    }));
+
     server.post('/client/send', handleErrors(async (req, res) => {
         const bodyData = req.body;
         if (!bodyData) throw new StatusError(400, "No request definition or options provided");
@@ -155,6 +250,26 @@ export function exposeRestAPI(
             res.end();
         });
     }));
+}
+
+async function defaultEnsureProxyPort(requestedProxyPort?: number): Promise<{
+    proxyPort: number,
+    session: { created: boolean, source: 'requested' | 'created' }
+}> {
+    if (requestedProxyPort) {
+        return {
+            proxyPort: requestedProxyPort,
+            session: { created: false, source: 'requested' }
+        };
+    }
+
+    const session = getRemote({ adminServerUrl: 'http://127.0.0.1:45456' });
+    await session.start();
+
+    return {
+        proxyPort: session.port,
+        session: { created: true, source: 'created' }
+    };
 }
 
 function getProxyPort(stringishInput: any) {
