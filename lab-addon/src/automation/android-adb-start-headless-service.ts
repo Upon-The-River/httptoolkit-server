@@ -27,13 +27,25 @@ interface SessionManagerLike {
     getTargetTrafficSignal(options?: { waitMs?: number, pollIntervalMs?: number }): Promise<TargetTrafficSignal>;
 }
 
+export interface AndroidAdbStartHeadlessServiceOptions {
+    androidNetworkSafety: AndroidNetworkSafetyApi;
+    sessionManager?: SessionManagerLike;
+    activationClient: AndroidActivationClient;
+    healthStore: AutomationHealthStore;
+}
+
 export class AndroidAdbStartHeadlessService {
-    constructor(
-        private readonly androidNetworkSafety: AndroidNetworkSafetyApi,
-        private readonly sessionManager: SessionManagerLike = new SessionManager(),
-        private readonly activationClient: AndroidActivationClient,
-        private readonly healthStore: AutomationHealthStore
-    ) {}
+    private readonly androidNetworkSafety: AndroidNetworkSafetyApi;
+    private readonly sessionManager: SessionManagerLike;
+    private readonly activationClient: AndroidActivationClient;
+    private readonly healthStore: AutomationHealthStore;
+
+    constructor(options: AndroidAdbStartHeadlessServiceOptions) {
+        this.androidNetworkSafety = options.androidNetworkSafety;
+        this.sessionManager = options.sessionManager ?? new SessionManager();
+        this.activationClient = options.activationClient;
+        this.healthStore = options.healthStore;
+    }
 
     async startHeadless(input: StartHeadlessRequest): Promise<StartHeadlessResponse> {
         const deviceId = typeof input.deviceId === 'string' && input.deviceId.trim().length > 0

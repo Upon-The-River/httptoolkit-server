@@ -70,6 +70,28 @@ describe('AdbAndroidActivationClient', () => {
         assert.equal((result.details as any).reason, 'missing-official-activation-bridge');
     });
 
+    it('official bridge unreachable falls back to partial adb intent mode', async () => {
+        const fakeAdb = new FakeAdbExecutor(['device-1'], (command) => {
+            if (command[0] === 'getprop') return 'Pixel 8';
+            if (command[0] === 'dumpsys' && command[1] === 'activity') return 'tech.httptoolkit.android.v1/.RemoteControlMainActivity';
+            return '';
+        });
+        const fakeFetch: typeof fetch = (async () => {
+            throw new Error('ECONNREFUSED');
+        }) as typeof fetch;
+        const client = new AdbAndroidActivationClient(fakeAdb, fakeFetch);
+
+        const result = await client.activateDeviceCapture({
+            deviceId: 'device-1',
+            proxyPort: 9001,
+            enableSocks: false
+        });
+
+        assert.equal(result.success, false);
+        assert.equal((result.details as any).activationMode, 'partial');
+        assert.equal((result.details as any).reason, 'missing-official-activation-bridge');
+    });
+
     it('official bridge structured failure returns bridge error details', async () => {
         const fakeAdb = new FakeAdbExecutor(['device-1'], () => '');
         const fakeFetch: typeof fetch = (async () =>
@@ -114,6 +136,26 @@ describe('AdbAndroidActivationClient', () => {
 
         assert.equal(result.success, true);
         assert.equal(fetchCalls[0], 'http://127.0.0.1:55555/automation/android-adb/start-headless');
+    });
+
+    it('does not fallback to addon 45457 when default official bridge is unavailable', async () => {
+        const fakeAdb = new FakeAdbExecutor([], () => '');
+        const fetchCalls: string[] = [];
+        const fakeFetch: typeof fetch = (async (url: string | URL | Request) => {
+            fetchCalls.push(String(url));
+            return new Response('missing', { status: 404 });
+        }) as typeof fetch;
+        const client = new AdbAndroidActivationClient(fakeAdb, fakeFetch);
+
+        await client.activateDeviceCapture({
+            deviceId: 'missing-device',
+            proxyPort: 9001,
+            enableSocks: false
+        });
+
+        assert.equal(fetchCalls.length, 1);
+        assert.equal(fetchCalls[0], 'http://127.0.0.1:45456/automation/android-adb/start-headless');
+        assert.equal(fetchCalls.some((url) => url.includes('45457')), false);
     });
 
     it('activation verifies device with fake ADB and builds expected commands', async () => {

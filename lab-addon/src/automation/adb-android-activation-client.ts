@@ -62,65 +62,56 @@ export class AdbAndroidActivationClient implements AndroidActivationClient {
     ) {}
 
     private async tryOfficialBridge(options: AndroidActivationRequest): Promise<AndroidActivationResult | undefined> {
-        const candidateBaseUrls = [this.officialAdminBaseUrl];
-        if (this.officialAdminBaseUrl === 'http://127.0.0.1:45456') {
-            candidateBaseUrls.push('http://127.0.0.1:45457');
+        const url = `${this.officialAdminBaseUrl.replace(/\/$/, '')}/automation/android-adb/start-headless`;
+        let response: Response;
+        try {
+            response = await this.fetchImpl(url, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    deviceId: options.deviceId,
+                    proxyPort: options.proxyPort,
+                    enableSocks: options.enableSocks,
+                    allowUnsafeStart: true
+                })
+            });
+        } catch (error) {
+            return undefined;
         }
 
-        for (const baseUrl of candidateBaseUrls) {
-            const url = `${baseUrl.replace(/\/$/, '')}/automation/android-adb/start-headless`;
-            let response: Response;
-            try {
-                response = await this.fetchImpl(url, {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({
-                        deviceId: options.deviceId,
-                        proxyPort: options.proxyPort,
-                        enableSocks: options.enableSocks,
-                        allowUnsafeStart: true
-                    })
-                });
-            } catch (error) {
-                continue;
-            }
+        if (response.status === 404) {
+            return undefined;
+        }
 
-            if (response.status === 404) {
-                continue;
-            }
-
-            const payload = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
-            if (!payload) {
-                return {
-                    success: false,
-                    details: {
-                        implemented: true,
-                        partial: true,
-                        safeStub: false,
-                        activationMode: 'partial',
-                        reason: 'official-bridge-invalid-response',
-                        bridgeUrl: url
-                    },
-                    errors: ['official-bridge-invalid-response']
-                };
-            }
-
-            const bridgeSuccess = payload.success === true;
+        const payload = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
+        if (!payload) {
             return {
-                success: bridgeSuccess,
+                success: false,
                 details: {
                     implemented: true,
-                    partial: !bridgeSuccess,
+                    partial: true,
                     safeStub: false,
-                    activationMode: bridgeSuccess ? 'adb-activation' : 'partial',
-                    bridgeUrl: url,
-                    bridgeResponse: payload
+                    activationMode: 'partial',
+                    reason: 'official-bridge-invalid-response',
+                    bridgeUrl: url
                 },
-                errors: bridgeSuccess ? [] : ['official-bridge-failed']
+                errors: ['official-bridge-invalid-response']
             };
         }
 
-        return undefined;
+        const bridgeSuccess = payload.success === true;
+        return {
+            success: bridgeSuccess,
+            details: {
+                implemented: true,
+                partial: !bridgeSuccess,
+                safeStub: false,
+                activationMode: bridgeSuccess ? 'adb-activation' : 'partial',
+                bridgeUrl: url,
+                bridgeResponse: payload
+            },
+            errors: bridgeSuccess ? [] : ['official-bridge-failed']
+        };
     }
 
     async activateDeviceCapture(options: AndroidActivationRequest): Promise<AndroidActivationResult> {

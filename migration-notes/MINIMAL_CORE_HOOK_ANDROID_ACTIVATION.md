@@ -29,7 +29,8 @@ No Qidian/export/rescue/device-governance logic is moved into core.
   - Configurable official admin base URL:
     - `LAB_ADDON_OFFICIAL_ADMIN_BASE_URL`
     - default `http://127.0.0.1:45456`
-  - Compatibility fallback: if default 45456 route is missing, also tries 45457 before partial fallback
+  - Never falls back to `http://127.0.0.1:45457` (addon server) to avoid recursive self-calls
+  - If the official bridge is 404/unreachable, falls back to partial ADB intent mode
 - `lab-addon/test/adb-android-activation-client.spec.ts`
   - official bridge success path
   - 404 fallback path
