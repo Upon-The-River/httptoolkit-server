@@ -21,7 +21,7 @@ Minimum passing evidence before core hook consideration:
 - `POST /session/start` is optional in default addon-only smoke; include it only with `-IncludeSessionStart` when full session backend conditions are available.
 - `POST /export/ingest` with `persist=true` writes JSONL (`exists=true` and `sizeBytes>0` from `/export/output-status`).
 - Official core cleanliness passes (no forbidden dirty official paths).
-- `/export/stream` still correctly reports `requires-core-hook`/stub (typically HTTP `501` pre-core-hook).
+- `/export/stream` still correctly reports `requires-core-hook`/stub (typically HTTP `501` pre-core-hook), and this is PASS evidence (not a failure) before core-hook work.
 
 Use `lab-addon/scripts/validate-lab-addon.ps1` with `-ReportPath` and retain the generated report artifact.
 
@@ -34,7 +34,7 @@ All of the following should pass (or be explicitly skipped with reason where opt
 - Addon endpoints reachable and required gates passing.
 - Optional `POST /session/start` included only when explicitly validating full session backend conditions.
 - Export ingest and output status validation complete.
-- `/export/stream` confirmed as `requires-core-hook`/stub behavior (HTTP `501` remains acceptable and expected before core hook work).
+- `/export/stream` confirmed as `requires-core-hook`/stub behavior (HTTP `501` remains acceptable and expected before core hook work, including script fallback to `/migration/status` capability metadata).
 - Official repo verified unchanged (read-only `git status --short`) when `-OfficialRoot` is provided.
 - Optional Android checks (`/android/network/inspect`, `/android/network/rescue` dry-run) included when Android is available.
 
