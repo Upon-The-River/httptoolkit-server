@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import { AddressInfo } from 'node:net';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
 import { AndroidNetworkSafetyApi } from '../src/android/android-network-safety';
+import { ExportFileSink } from '../src/export/export-file-sink';
 import { ExportIngestService } from '../src/export/export-ingest-service';
 import { ExportTargetsConfig } from '../src/export/export-types';
 import { createApp, SessionManagerLike, startServer } from '../src/server';
@@ -10,11 +14,20 @@ import { HeadlessControlApi } from '../src/headless/headless-types';
 import { SessionManager } from '../src/session/session-manager';
 
 const openServers: Array<{ close: () => Promise<void> }> = [];
+const tempDirs: string[] = [];
+
+const createTempRuntimeRoot = async (): Promise<string> => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-addon-server-export-'));
+    tempDirs.push(tempRoot);
+    return tempRoot;
+};
 
 afterEach(async () => {
     while (openServers.length > 0) {
         await openServers.pop()?.close();
     }
+
+    await Promise.all(tempDirs.splice(0, tempDirs.length).map((tempDir) => fs.rm(tempDir, { recursive: true, force: true })));
 });
 
 async function startTestServer(app = createApp()) {
@@ -128,7 +141,7 @@ describe('lab addon service endpoints', () => {
         assert.equal(Array.isArray(body.pendingRoutes), true);
         assert.equal(Array.isArray(body.capabilities), true);
         assert.deepEqual(body.summary, {
-            implemented: 14,
+            implemented: 15,
             safeStub: 4,
             pending: 0,
             requiresCoreHook: 1
@@ -511,7 +524,7 @@ describe('lab addon service endpoints', () => {
         assert.equal(body.result.targetName, 'target-a');
     });
 
-    it('ingests synthetic events at /export/ingest', async () => {
+    it('ingests synthetic events at /export/ingest without persisting by default', async () => {
         const { baseUrl } = await startTestServer(createApp({
             exportIngestService: new ExportIngestService(stubExportConfig.targets)
         }));
@@ -537,6 +550,64 @@ describe('lab addon service endpoints', () => {
         assert.equal(body.record.schemaVersion, 1);
         assert.equal(body.record.matchedTarget, 'target-a');
         assert.equal(body.record.contentType, 'application/json');
+        assert.equal(body.persisted, false);
+        assert.equal(body.outputPath, undefined);
+    });
+
+    it('persists /export/ingest records when persist=true using runtime JSONL sink', async () => {
+        const runtimeRoot = await createTempRuntimeRoot();
+        const sink = new ExportFileSink({ runtimeRoot });
+
+        const { baseUrl } = await startTestServer(createApp({
+            exportIngestService: new ExportIngestService(stubExportConfig.targets, sink),
+            exportFileSink: sink
+        }));
+
+        const response = await fetch(`${baseUrl}/export/ingest`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                persist: true,
+                event: {
+                    timestamp: '2026-01-02T03:04:05.000Z',
+                    method: 'GET',
+                    url: 'https://example.com/api/books',
+                    statusCode: 200
+                }
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.ok, true);
+        assert.equal(body.persisted, true);
+        assert.equal(typeof body.outputPath, 'string');
+        assert.equal(body.record.matchedTarget, 'target-a');
+
+        const statusResponse = await fetch(`${baseUrl}/export/output-status`);
+        assert.equal(statusResponse.status, 200);
+        const statusBody = await statusResponse.json();
+        assert.equal(statusBody.exists, true);
+        assert.equal(statusBody.sizeBytes > 0, true);
+        assert.equal(statusBody.jsonlPath, body.outputPath);
+    });
+
+    it('returns /export/output-status when output file does not yet exist', async () => {
+        const runtimeRoot = await createTempRuntimeRoot();
+        const sink = new ExportFileSink({ runtimeRoot });
+
+        const { baseUrl } = await startTestServer(createApp({
+            exportFileSink: sink
+        }));
+
+        const response = await fetch(`${baseUrl}/export/output-status`);
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.runtimeRoot, sink.paths.runtimeRoot);
+        assert.equal(body.exportDir, sink.paths.exportDir);
+        assert.equal(body.jsonlPath, sink.paths.jsonlPath);
+        assert.equal(body.exists, false);
+        assert.equal(body.sizeBytes, 0);
     });
 
     it('keeps /export/stream as requires-core-hook safe stub', async () => {

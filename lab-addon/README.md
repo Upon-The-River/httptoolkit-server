@@ -55,6 +55,9 @@ This is a migration-stage external addon for local Android/headless/Qidian tooli
   - Matches a synthetic HTTP event against target rules.
 - `POST /export/ingest`
   - Ingests a synthetic HTTP event and returns a normalized JSONL-compatible export record.
+  - Optional `{ "persist": true }` appends the normalized record to runtime JSONL output.
+- `GET /export/output-status`
+  - Returns runtime export output metadata (`runtimeRoot`, `exportDir`, `jsonlPath`, `exists`, `sizeBytes`).
 - `GET /export/stream`
   - Explicit safe stub (`501`) with `requires-core-hook` status until official core provides live traffic event hook.
 
@@ -86,7 +89,7 @@ curl -Method POST -Uri http://127.0.0.1:45457/export/match `
   -Body '{\"event\":{\"method\":\"GET\",\"url\":\"https://example.com/api/books\",\"statusCode\":200}}'
 ```
 
-Ingest normalized record:
+Ingest normalized record (non-persistent by default):
 
 ```powershell
 curl -Method POST -Uri http://127.0.0.1:45457/export/ingest `
@@ -94,13 +97,34 @@ curl -Method POST -Uri http://127.0.0.1:45457/export/ingest `
   -Body '{\"event\":{\"timestamp\":\"2026-01-02T03:04:05.000Z\",\"method\":\"GET\",\"url\":\"https://example.com/api/books\",\"statusCode\":200,\"responseHeaders\":{\"content-type\":\"application/json\"},\"responseBody\":\"{\\\"ok\\\":true}\"}}'
 ```
 
+
+Ingest and persist to runtime JSONL:
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/export/ingest `
+  -ContentType 'application/json' `
+  -Body '{"persist":true,"event":{"timestamp":"2026-01-02T03:04:05.000Z","method":"GET","url":"https://example.com/api/books","statusCode":200,"responseHeaders":{"content-type":"application/json"},"responseBody":"{\"ok\":true}"}}'
+```
+
+Check runtime output status:
+
+```powershell
+curl http://127.0.0.1:45457/export/output-status
+```
+
+Default JSONL output path:
+
+- `lab-addon/runtime/exports/session_hits.jsonl`
+
+Runtime files under `lab-addon/runtime/` are local artifacts and should not be committed.
+
 Stream status stub:
 
 ```powershell
 curl http://127.0.0.1:45457/export/stream
 ```
 
-This returns a clear JSON stub indicating that live streaming requires a future minimal official core hook. No official HTTP Toolkit core files were modified for this addon export skeleton.
+This returns a clear JSON stub indicating that live streaming still requires a future minimal official core hook. No official HTTP Toolkit core files were modified for this addon export skeleton.
 
 ## Run locally
 

@@ -185,6 +185,17 @@ export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
         description: 'Matches synthetic export events against addon target rules.',
         notes: 'Used for validation/testing without core traffic hooks.'
     },
+
+    {
+        id: 'export-output-status',
+        method: 'GET',
+        path: '/export/output-status',
+        domain: 'export',
+        status: 'implemented',
+        mutatesDeviceState: false,
+        description: 'Reports addon runtime export output file status for JSONL persistence.',
+        notes: 'Read-only runtime artifact metadata endpoint.'
+    },
     {
         id: 'export-ingest',
         method: 'POST',

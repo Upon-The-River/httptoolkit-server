@@ -1,0 +1,4 @@
+# Keep runtime scaffolding in git, ignore generated artifacts.
+*
+!.gitignore
+!.gitkeep

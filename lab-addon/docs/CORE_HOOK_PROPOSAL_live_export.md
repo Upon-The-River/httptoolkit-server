@@ -2,7 +2,7 @@
 
 ## Context
 
-The addon now implements export target loading, rule matching, and synthetic event ingestion under addon-owned routes. This allows deterministic testing without requiring official core internals or real network traffic.
+The addon now implements export target loading, rule matching, synthetic event ingestion, and runtime JSONL file-sink persistence under addon-owned routes. This allows deterministic testing without requiring official core internals or real network traffic.
 
 ## Why addon-only cannot fully observe live traffic yet
 
@@ -12,7 +12,7 @@ The addon now implements export target loading, rule matching, and synthetic eve
 
 ## Minimal official core hook needed
 
-A minimal and non-domain-specific core hook should emit normalized traffic events from the official interception flow:
+The addon-side ingest pipeline and file sink are now in place. A minimal and non-domain-specific official core hook only needs to emit normalized traffic events from the official interception flow so the existing addon ingest pipeline can consume them:
 
 - Hook type: event emitter callback registration.
 - Trigger: each completed request/response observation.
@@ -44,7 +44,8 @@ interface CoreObservedHttpEvent {
 2. Addon bridge receives event.
 3. Addon runs target matcher (`/export/match` logic).
 4. Addon normalizes to JSONL-compatible record (`/export/ingest` logic).
-5. Addon publishes to `/export/stream` subscribers and optional file sinks.
+5. Addon appends normalized records to `lab-addon/runtime/exports/session_hits.jsonl` when persistence is enabled.
+6. Addon publishes to `/export/stream` subscribers once official core hook delivery exists.
 
 ## Validation plan
 

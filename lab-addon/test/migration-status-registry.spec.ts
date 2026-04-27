@@ -9,7 +9,7 @@ describe('migration status registry', () => {
 
         assert.equal(registry.capabilities.length, MIGRATION_CAPABILITIES.length);
         assert.deepEqual(registry.summary, {
-            implemented: 14,
+            implemented: 15,
             safeStub: 4,
             pending: 0,
             requiresCoreHook: 1
@@ -22,6 +22,11 @@ describe('migration status registry', () => {
             'POST /headless/recover',
             'GET /export/stream'
         ]);
+
+
+        const exportOutputStatus = registry.capabilities.find((capability) => capability.path === '/export/output-status');
+        assert.ok(exportOutputStatus);
+        assert.equal(exportOutputStatus.status, 'implemented');
 
         const exportCapabilities = registry.capabilities.find((capability) => capability.path === '/export/capabilities');
         assert.ok(exportCapabilities);
