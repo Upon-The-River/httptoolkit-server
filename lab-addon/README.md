@@ -335,7 +335,8 @@ This validation path is safe by default:
 - Android rescue stays dry-run unless `-ExecuteAndroidRescue` is provided.
 - Headless checks are skipped unless `-IncludeHeadless` is provided.
 - Headless start stays dry-run unless `-ExecuteHeadlessStart` is provided.
-- `/export/stream` is checked as a `requires-core-hook` stub only.
+- `/session/start` is skipped unless `-IncludeSessionStart` is provided (it may require full official/mockttp session backend conditions).
+- `/export/stream` is checked as a `requires-core-hook` stub (HTTP `501` expected pre-core-hook).
 
 Example report commands:
 
@@ -352,4 +353,10 @@ Example report commands:
   -PersistExportTest `
   -ReportPath ".\runtime\validation\addon-smoke.json" `
   -WriteJsonReport
+
+.\scripts\validate-lab-addon.ps1 `
+  -SkipNpm `
+  -IncludeSessionStart `
+  -ReportPath ".\runtime\validation\addon-smoke-with-session-start.md" `
+  -WriteMarkdownReport
 ```

@@ -28,7 +28,8 @@ Goals:
 - `/android/network/rescue` defaults to `dryRun=true`.
 - `/headless/start` uses dry-run mode by default in validation.
 - `/headless/stop` and `/headless/recover` stay conservative (not executed by default in smoke validation).
-- `/export/stream` is expected to remain `requires-core-hook`.
+- `/session/start` is optional in default smoke validation (`-IncludeSessionStart` enables it as a required gate).
+- `/export/stream` is expected to remain `requires-core-hook` before core-hook work (commonly HTTP `501`).
 - Do **not** run `clearPrivateDns` or `clearAlwaysOnVpn` unless explicitly understood and approved.
 - Validation scripts do **not** reboot devices, uninstall apps, disable VPN packages, or kill arbitrary external processes.
 - Failed `official-core-cleanliness` must block core-hook work.
@@ -58,6 +59,16 @@ npm run start
   -WriteMarkdownReport
 ```
 
+Optional full-session gate (only when full official/mockttp session backend conditions are available):
+
+```powershell
+.\scripts\validate-lab-addon.ps1 `
+  -SkipNpm `
+  -IncludeSessionStart `
+  -ReportPath ".\runtime\validation\addon-smoke-with-session-start.md" `
+  -WriteMarkdownReport
+```
+
 ### 3) Run automated validation with Android checks (optional)
 
 ```powershell
@@ -81,11 +92,12 @@ curl http://127.0.0.1:45457/export/output-status
 curl http://127.0.0.1:45457/export/stream
 ```
 
-`/export/stream` is expected to return a structured `requires-core-hook` response/stub at this stage.
+`/export/stream` is expected to return a structured `requires-core-hook` response/stub at this stage, most commonly via HTTP `501`.
 
 ## E. Expected Results
 
-- Required endpoint gates pass (`/health`, `/migration/status`, session/Qidian/export endpoints).
+- Required endpoint gates pass (`/health`, `/migration/status`, `/qidian/match`, `/session/latest`, export endpoints).
+- `POST /session/start` is optional by default and only required when `-IncludeSessionStart` is used.
 - `POST /export/ingest` succeeds.
 - If `-PersistExportTest` is used, `/export/output-status` confirms `exists=true` and `sizeBytes>0`.
 - `GET /export/stream` returns a `requires-core-hook`/stub response.
@@ -103,6 +115,8 @@ Additional expectations:
 |---|---|---|
 | Addon server not reachable | Addon not running/wrong port | Run `npm run start` in `lab-addon`; verify `AddonBaseUrl`. |
 | Required gate fails | Endpoint regression or startup issue | Fix endpoint behavior before core-hook discussion. |
+| `POST /session/start` fails when enabled | Full official/mockttp session backend conditions unavailable | Re-run default addon-only smoke (without `-IncludeSessionStart`) or provide full session backend and retry. |
+| `/export/stream` returns HTTP 501 with `requires-core-hook` | Expected pre-core-hook behavior | Treat as pass for addon-only smoke; proceed with remaining gates/evidence. |
 | `/export/output-status` has `exists=false` after `persist=true` ingest | Persistence not writing JSONL | Investigate export persistence and rerun with `-PersistExportTest`. |
 | `official-core-cleanliness` fails | Forbidden official paths are dirty | Clean forbidden official paths before core-hook planning. |
 | ADB not found | `adb` missing in `PATH` | Install Android platform tools and retry Android checks. |
@@ -115,8 +129,8 @@ Validation is complete when:
 - `npm run typecheck` passes (or is intentionally skipped with reason).
 - `npm test` passes (or is intentionally skipped with reason).
 - Required endpoint gates pass.
+- `/session/start` is optional unless explicitly enabled with `-IncludeSessionStart`.
 - `/export/ingest` with `persist=true` is verified when `-PersistExportTest` is requested.
 - `/export/stream` still reports `requires-core-hook`.
 - Official-core cleanliness is reviewed and does not fail for forbidden paths.
 - A validation report is generated and reviewed before any core-hook work.
-
