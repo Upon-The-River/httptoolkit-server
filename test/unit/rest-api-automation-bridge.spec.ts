@@ -141,6 +141,7 @@ describe('Android activation bridge server', () => {
             const body = await response.json();
             expect(response.status).to.equal(200);
             expect(body.success).to.equal(true);
+            expect(body.proxySessionPrepared).to.equal(true);
             expect(body.controlPlaneSuccess).to.equal(true);
             expect(body.bootstrapRulesApplied).to.equal(true);
             expect(body.bootstrapResult.rules).to.deep.equal([
@@ -165,11 +166,15 @@ describe('Android activation bridge server', () => {
         process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
         process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
 
+        let activationCalled = false;
         const bridge = await startAndroidActivationBridgeServer({
             apiModel: {
                 getConfig: async () => ({ certificateContent: 'mock-cert-content' }),
                 getInterceptorMetadata: async () => ({ deviceIds: ['device-1'] }),
-                activateInterceptor: async () => ({ success: true, metadata: { activated: true } })
+                activateInterceptor: async () => {
+                    activationCalled = true;
+                    return { success: true, metadata: { activated: true } };
+                }
             } as any,
             ensureProxyPort: async () => ({
                 proxyPort: 9000,
@@ -200,10 +205,55 @@ describe('Android activation bridge server', () => {
 
             expect(response.status).to.equal(500);
             expect(body.success).to.equal(false);
+            expect(body.proxySessionPrepared).to.equal(true);
             expect(body.controlPlaneSuccess).to.equal(false);
             expect(body.bootstrapRulesApplied).to.equal(false);
             expect(body.errors).to.deep.equal(['android-bootstrap-rules-failed']);
             expect(body.warning).to.equal('VPN/data-plane success must be verified separately.');
+            expect(activationCalled).to.equal(false);
+        } finally {
+            await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
+        }
+    });
+
+    it('returns structured failure if proxy session preparation receives 403 from mockttp admin', async () => {
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
+
+        let activationCalled = false;
+        const bridge = await startAndroidActivationBridgeServer({
+            apiModel: {
+                getConfig: async () => ({ certificateContent: 'mock-cert-content' }),
+                getInterceptorMetadata: async () => ({ deviceIds: ['device-1'] }),
+                activateInterceptor: async () => {
+                    activationCalled = true;
+                    return { success: true, metadata: { activated: true } };
+                }
+            } as any,
+            ensureProxyPort: async () => {
+                throw new Error('Request to http://127.0.0.1:45456/start?port=8000 failed, with status 403');
+            }
+        });
+
+        const port = ((bridge!.address() as any).port);
+
+        try {
+            const response = await fetch(`http://127.0.0.1:${port}/automation/android-adb/start-headless`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ deviceId: 'device-1', proxyPort: 8000 })
+            });
+            const body = await response.json();
+
+            expect(response.status).to.equal(500);
+            expect(body.success).to.equal(false);
+            expect(body.proxySessionPrepared).to.equal(false);
+            expect(body.controlPlaneSuccess).to.equal(false);
+            expect(body.bootstrapRulesApplied).to.equal(false);
+            expect(body.errors).to.deep.equal(['proxy-session-preparation-failed']);
+            expect(body.activationResult.metadata.proxySessionError.code).to.equal('mockttp-admin-forbidden');
+            expect(body.activationResult.metadata.proxySessionError.statusCode).to.equal(403);
+            expect(activationCalled).to.equal(false);
         } finally {
             await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
         }
@@ -248,8 +298,9 @@ describe('Android activation bridge server', () => {
 
             expect(response.status).to.equal(500);
             expect(body.success).to.equal(false);
+            expect(body.proxySessionPrepared).to.equal(true);
             expect(body.controlPlaneSuccess).to.equal(false);
-            expect(body.bootstrapRulesApplied).to.equal(false);
+            expect(body.bootstrapRulesApplied).to.equal(true);
             expect(body.errors).to.deep.equal(['activation-bridge-internal-error']);
         } finally {
             await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
