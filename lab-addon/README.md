@@ -373,3 +373,27 @@ Example report commands:
   -ReportPath ".\runtime\validation\addon-smoke-with-session-start.md" `
   -WriteMarkdownReport
 ```
+
+## PowerShell Android automation compatibility
+
+This addon restores compatibility for the old working-fork PowerShell/start automation route without patching official core files.
+
+New addon-compatible routes:
+
+- `POST /automation/android-adb/start-headless`
+- `POST /automation/android-adb/stop-headless`
+- `POST /automation/android-adb/recover-headless`
+- `GET /automation/health`
+
+PowerShell command:
+
+```powershell
+.\scripts\android\start-headless.ps1 -DeviceId <id> -AllowUnsafeStart
+```
+
+Compatibility notes & current limitations:
+
+- Official HTTP Toolkit core remains unchanged.
+- Start-headless route returns a legacy-compatible automation response shape from addon.
+- Activation behavior may be partial unless an explicit activation bridge/client is configured (default is conservative safe stub).
+- Stop/recover are conservative safe-stub flows unless explicitly implemented with a safe activation client.

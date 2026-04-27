@@ -4,7 +4,8 @@ export type MigrationStatusDomain =
     | 'android-network'
     | 'headless'
     | 'export'
-    | 'core-bridge';
+    | 'core-bridge'
+    | 'automation';
 
 export type MigrationStatusState =
     | 'implemented'

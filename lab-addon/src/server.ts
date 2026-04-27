@@ -3,6 +3,9 @@ import { AddressInfo } from 'node:net';
 import { Server } from 'node:http';
 
 import { AndroidNetworkSafetyApi, AndroidNetworkSafetyService } from './android/android-network-safety';
+import { AndroidAdbStartHeadlessService } from './automation/android-adb-start-headless-service';
+import { AutomationHealthStore } from './automation/automation-health-store';
+import { AndroidActivationClient, SafeStubAndroidActivationClient } from './automation/android-activation-client';
 import { matchQidianTraffic, QidianTrafficMatchResult } from './qidian/qidian-traffic-matcher';
 import { HeadlessControlService } from './headless/headless-control-service';
 import { HeadlessHealthService } from './headless/headless-health-service';
@@ -28,6 +31,15 @@ export interface SessionManagerLike {
     }>;
     getLatestSession(): LatestSessionState;
     stopLatestSession(): Promise<{ stopped: boolean }>;
+    getObservedTrafficSignal(options?: { waitMs?: number, pollIntervalMs?: number }): Promise<{
+        observed: boolean,
+        bootstrapOnly?: boolean,
+        source: 'none' | 'observed-session-traffic',
+        totalSeenRequests: number,
+        ignoredBootstrapRequests: number,
+        matchingRequests: number,
+        sampleUrl?: string
+    }>;
     getTargetTrafficSignal(options?: { waitMs?: number, pollIntervalMs?: number }): Promise<TargetTrafficSignal>;
 }
 
@@ -40,6 +52,8 @@ export interface CreateAppOptions {
     exportIngestService?: ExportIngestService;
     exportFileSink?: ExportFileSink;
     exportTargetsLoader?: typeof loadExportTargetsConfig;
+    automationService?: AndroidAdbStartHeadlessService;
+    automationActivationClient?: AndroidActivationClient;
 }
 
 
@@ -54,6 +68,13 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const sessionManager = options.sessionManager ?? new SessionManager();
     const matchTraffic = options.matchTraffic ?? matchQidianTraffic;
     const androidNetworkSafety = options.androidNetworkSafety ?? new AndroidNetworkSafetyService();
+    const automationActivationClient = options.automationActivationClient ?? new SafeStubAndroidActivationClient();
+    const automationService = options.automationService ?? new AndroidAdbStartHeadlessService(
+        androidNetworkSafety,
+        sessionManager,
+        automationActivationClient,
+        new AutomationHealthStore()
+    );
     const headlessControl = options.headlessControl ?? new HeadlessControlService();
     const headlessHealth = options.headlessHealth ?? new HeadlessHealthService({
         getCapabilities: () => headlessControl.getCapabilities(),
@@ -134,6 +155,41 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     app.get('/android/network/capabilities', (_req, res: Response) => {
         res.json(androidNetworkSafety.getCapabilities());
+    });
+
+    app.post('/automation/android-adb/start-headless', asyncHandler(async (req: Request, res: Response) => {
+        const result = await automationService.startHeadless({
+            deviceId: typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined,
+            allowUnsafeStart: req.body?.allowUnsafeStart === true,
+            enableSocks: req.body?.enableSocks === true,
+            waitForTraffic: req.body?.waitForTraffic === true,
+            waitForTargetTraffic: req.body?.waitForTargetTraffic === true
+        });
+
+        const statusCode = result.success ? 200 : 409;
+        res.status(statusCode).json(result);
+    }));
+
+    app.post('/automation/android-adb/stop-headless', asyncHandler(async (req: Request, res: Response) => {
+        const result = await automationService.stopHeadless({
+            deviceId: typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined
+        });
+        res.json(result);
+    }));
+
+    app.post('/automation/android-adb/recover-headless', asyncHandler(async (req: Request, res: Response) => {
+        const result = await automationService.recoverHeadless({
+            deviceId: typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined
+        });
+        res.json(result);
+    }));
+
+    app.get('/automation/health', (_req, res: Response) => {
+        const health = automationService.getHealth();
+        res.json({
+            success: true,
+            health
+        });
     });
 
     app.get('/headless/health', (_req, res: Response) => {
