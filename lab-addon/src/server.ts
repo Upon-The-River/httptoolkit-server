@@ -70,12 +70,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const matchTraffic = options.matchTraffic ?? matchQidianTraffic;
     const androidNetworkSafety = options.androidNetworkSafety ?? new AndroidNetworkSafetyService();
     const automationActivationClient = options.automationActivationClient ?? new AdbAndroidActivationClient();
-    const automationService = options.automationService ?? new AndroidAdbStartHeadlessService(
+    const automationService = options.automationService ?? new AndroidAdbStartHeadlessService({
         androidNetworkSafety,
         sessionManager,
-        automationActivationClient,
-        new AutomationHealthStore()
-    );
+        activationClient: automationActivationClient,
+        healthStore: new AutomationHealthStore()
+    });
     const headlessControl = options.headlessControl ?? new HeadlessControlService();
     const headlessHealth = options.headlessHealth ?? new HeadlessHealthService({
         getCapabilities: () => headlessControl.getCapabilities(),
