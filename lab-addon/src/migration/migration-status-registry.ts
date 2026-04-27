@@ -193,6 +193,17 @@ export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
         notes: 'Used for validation/testing without core traffic hooks.'
     },
 
+
+    {
+        id: 'official-core-export-hook',
+        method: 'POST',
+        path: '/export/ingest',
+        domain: 'export',
+        status: 'implemented',
+        mutatesDeviceState: false,
+        description: 'Official core opt-in hook can forward observed traffic events into addon ingest.',
+        notes: 'Enable HTK_LAB_ADDON_EXPORT_ENABLED=true in official core to deliver live observed HTTP metadata to addon ingest.'
+    },
     {
         id: 'export-output-status',
         method: 'GET',

@@ -10,7 +10,7 @@ describe('migration status registry', () => {
 
         assert.equal(registry.capabilities.length, MIGRATION_CAPABILITIES.length);
         assert.deepEqual(registry.summary, {
-            implemented: 16,
+            implemented: 17,
             safeStub: 3,
             pending: 0,
             requiresCoreHook: 1

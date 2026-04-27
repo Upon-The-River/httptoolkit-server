@@ -51,6 +51,26 @@ describe('export ingest service', () => {
         assert.equal(ingestResult.persisted, false);
     });
 
+
+    it('supports official core hook event shape fields', () => {
+        const ingestService = new ExportIngestService([]);
+
+        const ingestResult = ingestService.ingest({
+            observedAt: '2026-04-27T00:00:00.000Z',
+            method: 'post',
+            url: 'https://example.com/binary',
+            statusCode: 201,
+            contentType: 'application/octet-stream',
+            bodyBase64: Buffer.from([0, 1, 2, 3]).toString('base64'),
+            source: 'official-core-hook'
+        });
+
+        assert.equal(ingestResult.record.observedAt, '2026-04-27T00:00:00.000Z');
+        assert.equal(ingestResult.record.method, 'POST');
+        assert.equal(ingestResult.record.contentType, 'application/octet-stream');
+        assert.equal(ingestResult.record.body.encoding, 'base64');
+    });
+
     it('export-file-sink appends JSONL records without overwriting existing lines', async () => {
         const runtimeRoot = await createTempRuntimeRoot();
         const sink = new ExportFileSink({ runtimeRoot });

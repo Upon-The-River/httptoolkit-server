@@ -1,60 +1,61 @@
 # CORE_HOOK_PROPOSAL_live_export
 
+## Status update (April 27, 2026)
+
+- **Implemented (minimal core hook):** official core can now forward observed HTTP request/response events to addon `POST /export/ingest` when explicitly enabled.
+- **Still not implemented:** addon `GET /export/stream` remains a stub/capability endpoint (`requires-core-hook`) and does not yet provide a realtime subscriber stream.
+
 ## Context
 
-The addon now implements export target loading, rule matching, synthetic event ingestion, and runtime JSONL file-sink persistence under addon-owned routes. This allows deterministic testing without requiring official core internals or real network traffic.
+The addon implements export target loading, rule matching, event ingestion, and runtime JSONL persistence under addon-owned routes. The minimal official-core bridge now feeds real observed traffic into this existing addon ingestion pipeline.
 
-## Why addon-only cannot fully observe live traffic yet
+## Implemented core hook (minimal + generic)
 
-- The addon process does not own the authoritative stream of completed HTTP exchanges from the official HTTP Toolkit interception pipeline.
-- Live traffic events are generated inside official core interceptors/session components and are not currently emitted to external addon consumers.
-- Without an official hook, `/export/stream` cannot provide true real-time HTTP Toolkit traffic, only synthetic/test traffic.
+Official core adds an isolated bridge module at:
 
-## Minimal official core hook needed
+- `src/export/live-export-addon-bridge.ts`
 
-The addon-side ingest pipeline and file sink are now in place. A minimal and non-domain-specific official core hook only needs to emit normalized traffic events from the official interception flow so the existing addon ingest pipeline can consume them:
+Behavior:
 
-- Hook type: event emitter callback registration.
-- Trigger: each completed request/response observation.
-- Payload: transport-agnostic event object (no Qidian logic).
-- Delivery: best-effort fire-and-forget to registered listeners.
+- Reads opt-in config from env vars.
+- Listens to completed Mockttp request/response events.
+- Normalizes generic observed HTTP event data.
+- Best-effort `POST`s to `{baseUrl}/export/ingest`.
+- Never adds Qidian-specific logic.
+- Never writes JSONL in core.
+- Never throws into the interception path on bridge failures.
 
-Example proposal:
+## Current delivery payload
 
-```ts
-interface CoreObservedHttpEvent {
-  observedAt: string;
-  method: string;
-  url: string;
-  statusCode: number;
-  responseHeaders: Record<string, string>;
-  responseBodyBase64?: string;
+```json
+{
+  "persist": true,
+  "event": {
+    "observedAt": "2026-04-27T00:00:00.000Z",
+    "method": "GET",
+    "url": "https://example.com/path",
+    "statusCode": 200,
+    "contentType": "application/json",
+    "requestHeaders": {"accept": "*/*"},
+    "responseHeaders": {"content-type": "application/json"},
+    "bodyText": "{\"ok\":true}",
+    "source": "official-core-hook"
+  }
 }
 ```
 
-## Why hook must stay generic (no Qidian-specific logic)
+For non-text responses, core attempts `bodyBase64`; if unavailable, payload is metadata-only.
 
-- Official HTTP Toolkit core must remain reusable and upstream-friendly.
-- Qidian-specific matching/routing belongs in addon config and addon modules.
-- Keeping the hook generic enables other addon use-cases and limits maintenance burden in core.
+## Remaining gaps
 
-## How addon will consume the event
+1. `/export/stream` is still a non-streaming stub and should continue to report `requires-core-hook`.
+2. Body capture is best effort and content-type dependent.
+3. Hook is process-local and opt-in via env flags.
 
-1. Core emits `CoreObservedHttpEvent`.
-2. Addon bridge receives event.
-3. Addon runs target matcher (`/export/match` logic).
-4. Addon normalizes to JSONL-compatible record (`/export/ingest` logic).
-5. Addon appends normalized records to `lab-addon/runtime/exports/session_hits.jsonl` when persistence is enabled.
-6. Addon publishes to `/export/stream` subscribers once official core hook delivery exists.
+## Rollback
 
-## Validation plan
+Disable the hook by unsetting or setting:
 
-- Phase 1 (done): synthetic ingestion tests and endpoint coverage in addon only.
-- Phase 2 (future): integration test with a mocked core emitter (no real network).
-- Phase 3 (future): controlled end-to-end smoke in lab environment.
+- `HTK_LAB_ADDON_EXPORT_ENABLED=false`
 
-## Rollback plan
-
-- Keep core hook isolated behind a feature flag.
-- If instability appears, disable the flag and return `/export/stream` to current `requires-core-hook` stub.
-- Addon endpoints `/export/capabilities`, `/export/targets`, `/export/match`, and `/export/ingest` remain functional for synthetic testing regardless of hook availability.
+This reverts behavior to addon synthetic/manual ingest only, without changing addon API contracts.

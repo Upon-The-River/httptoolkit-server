@@ -10,6 +10,6 @@ export function getExportCapabilities(): ExportCapabilities {
             status: 'requires-core-hook',
             reason: 'Addon cannot observe live HTTP Toolkit traffic without an official core event hook.'
         },
-        notes: 'Addon-side export supports synthetic event testing and normalized JSONL-compatible records.'
+        notes: 'Addon export supports synthetic testing and can ingest opt-in official core live hook events via /export/ingest.'
     };
 }

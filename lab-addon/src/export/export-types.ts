@@ -13,12 +13,18 @@ export interface ExportTargetsConfig {
 
 export interface SyntheticHttpEvent {
     timestamp?: string;
+    observedAt?: string;
     method: string;
     url: string;
     statusCode: number;
+    contentType?: string;
+    requestHeaders?: Record<string, string>;
     responseHeaders?: Record<string, string>;
     responseBody?: string;
+    bodyText?: string;
+    bodyBase64?: string;
     responseBodyEncoding?: 'utf8' | 'base64';
+    source?: string;
 }
 
 export interface ExportMatchResult {

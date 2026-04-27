@@ -4,16 +4,34 @@ import { matchExportEvent } from './export-event-matcher';
 import { ExportMatchResult, ExportTargetRule, NormalizedExportRecord, SyntheticHttpEvent } from './export-types';
 import { ExportFileSink } from './export-file-sink';
 
-const getContentType = (headers: Record<string, string> | undefined): string => {
+const getContentType = (headers: Record<string, string> | undefined, fallbackContentType?: string): string => {
     const contentTypeHeader = Object.entries(headers ?? {})
         .find(([headerName]) => headerName.toLowerCase() === 'content-type');
 
-    return contentTypeHeader?.[1]?.trim() || 'application/octet-stream';
+    return contentTypeHeader?.[1]?.trim() || fallbackContentType?.trim() || 'application/octet-stream';
+};
+
+const getEventBody = (event: SyntheticHttpEvent): { value: string, encoding: 'utf8' | 'base64' } => {
+    if (typeof event.bodyBase64 === 'string') {
+        return { value: event.bodyBase64, encoding: 'base64' };
+    }
+
+    if (typeof event.responseBody === 'string') {
+        return { value: event.responseBody, encoding: event.responseBodyEncoding ?? 'utf8' };
+    }
+
+    if (typeof event.bodyText === 'string') {
+        return { value: event.bodyText, encoding: 'utf8' };
+    }
+
+    return { value: '', encoding: event.responseBodyEncoding ?? 'utf8' };
 };
 
 const getStableRecordId = (event: SyntheticHttpEvent, observedAt: string): string => {
+    const body = getEventBody(event);
+
     return createHash('sha256')
-        .update(`${observedAt}|${event.method.toUpperCase()}|${event.url}|${event.statusCode}|${event.responseBody ?? ''}`)
+        .update(`${observedAt}|${event.method.toUpperCase()}|${event.url}|${event.statusCode}|${body.value}`)
         .digest('hex')
         .slice(0, 16);
 };
@@ -40,8 +58,9 @@ export class ExportIngestService {
     }
 
     normalize(event: SyntheticHttpEvent): NormalizedExportRecord {
-        const observedAt = event.timestamp ?? new Date().toISOString();
+        const observedAt = event.observedAt ?? event.timestamp ?? new Date().toISOString();
         const matchResult = this.match(event);
+        const body = getEventBody(event);
 
         return {
             schemaVersion: 1,
@@ -50,10 +69,10 @@ export class ExportIngestService {
             method: event.method.toUpperCase(),
             url: event.url,
             statusCode: event.statusCode,
-            contentType: getContentType(event.responseHeaders),
+            contentType: getContentType(event.responseHeaders, event.contentType),
             body: {
-                inline: event.responseBody ?? '',
-                encoding: event.responseBodyEncoding ?? 'utf8'
+                inline: body.value,
+                encoding: body.encoding
             },
             matchedTarget: matchResult.targetName
         };

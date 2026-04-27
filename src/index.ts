@@ -33,6 +33,7 @@ import {
 } from './interceptors/docker/docker-interception-services';
 import { clearWebExtensionConfig, updateWebExtensionConfig } from './webextension';
 import { HttpClient } from './client/http-client';
+import { LiveExportAddonBridge } from './export/live-export-addon-bridge';
 
 async function generateHTTPSConfig(configPath: string) {
     const keyPath = path.join(configPath, 'ca.key');
@@ -85,7 +86,8 @@ function manageBackgroundServices(
         http: MockttpAdminPlugin,
         webrtc: MockRTCAdminPlugin
     }>,
-    httpsConfig: { certPath: string, certContent: string }
+    httpsConfig: { certPath: string, certContent: string },
+    liveExportAddonBridge: LiveExportAddonBridge
 ) {
     let activeSessions = 0;
 
@@ -113,6 +115,16 @@ function manageBackgroundServices(
         .catch((error) => {
             console.log("Could not update WebRTC config:", error);
         });
+
+        if (liveExportAddonBridge.isEnabled()) {
+            void http.getMockServer().on('request', (request) => {
+                liveExportAddonBridge.trackRequest(request);
+            });
+
+            void http.getMockServer().on('response', (response) => {
+                liveExportAddonBridge.trackResponse(response);
+            });
+        }
     });
 
     standalone.on('mock-session-stopping', ({ http }) => {
@@ -212,7 +224,9 @@ export async function runHTK(options: {
         ruleParameters // Rule parameter dictionary
     });
 
-    manageBackgroundServices(standalone, httpsConfig);
+    const liveExportAddonBridge = LiveExportAddonBridge.fromEnvironment();
+
+    manageBackgroundServices(standalone, httpsConfig, liveExportAddonBridge);
 
     await standalone.start({
         port: 45456,
