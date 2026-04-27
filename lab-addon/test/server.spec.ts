@@ -608,9 +608,18 @@ describe('lab addon service endpoints', () => {
         assert.equal(body.success, true);
     });
 
-    it('fake activation failure returns success=false and errors', async () => {
+    it('start-headless with activation partial failure returns structured success=false', async () => {
         const activationClient: AndroidActivationClient = {
-            activateDeviceCapture: async () => ({ success: false, details: { mode: 'fake-failure' }, errors: ['activation-failed'] }),
+            activateDeviceCapture: async () => ({
+                success: false,
+                details: {
+                    implemented: true,
+                    partial: true,
+                    activationMode: 'partial',
+                    reason: 'missing-official-activation-bridge'
+                },
+                errors: ['activation-not-confirmed']
+            }),
             stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
             recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
         };
@@ -630,6 +639,9 @@ describe('lab addon service endpoints', () => {
         assert.equal(response.status, 409);
         const body = await response.json();
         assert.equal(body.success, false);
+        assert.equal(body.activationResult.partial, true);
+        assert.equal(body.activationResult.reason, 'missing-official-activation-bridge');
+        assert.equal(body.health.activationMode, 'partial');
         assert.equal(body.errors[0].code, 'activation-failed');
     });
 
@@ -657,6 +669,7 @@ describe('lab addon service endpoints', () => {
         const body = await response.json();
         assert.equal(body.success, true);
         assert.equal(body.health.lastRoute, 'POST /automation/android-adb/start-headless');
+        assert.equal(body.health.activationMode, 'adb-activation');
     });
 
     it('stop-headless returns safe-stub or fake stop response', async () => {

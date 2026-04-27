@@ -5,7 +5,8 @@ import { Server } from 'node:http';
 import { AndroidNetworkSafetyApi, AndroidNetworkSafetyService } from './android/android-network-safety';
 import { AndroidAdbStartHeadlessService } from './automation/android-adb-start-headless-service';
 import { AutomationHealthStore } from './automation/automation-health-store';
-import { AndroidActivationClient, SafeStubAndroidActivationClient } from './automation/android-activation-client';
+import { AndroidActivationClient } from './automation/android-activation-client';
+import { AdbAndroidActivationClient } from './automation/adb-android-activation-client';
 import { matchQidianTraffic, QidianTrafficMatchResult } from './qidian/qidian-traffic-matcher';
 import { HeadlessControlService } from './headless/headless-control-service';
 import { HeadlessHealthService } from './headless/headless-health-service';
@@ -68,7 +69,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const sessionManager = options.sessionManager ?? new SessionManager();
     const matchTraffic = options.matchTraffic ?? matchQidianTraffic;
     const androidNetworkSafety = options.androidNetworkSafety ?? new AndroidNetworkSafetyService();
-    const automationActivationClient = options.automationActivationClient ?? new SafeStubAndroidActivationClient();
+    const automationActivationClient = options.automationActivationClient ?? new AdbAndroidActivationClient();
     const automationService = options.automationService ?? new AndroidAdbStartHeadlessService(
         androidNetworkSafety,
         sessionManager,

@@ -4,6 +4,17 @@ import { AutomationHealthStore } from './automation-health-store';
 import { AndroidActivationClient } from './android-activation-client';
 import { StartHeadlessRequest, StartHeadlessResponse } from './android-activation-types';
 
+
+const resolveActivationMode = (activationResult: { success: boolean, details?: Record<string, unknown> }): 'safe-stub' | 'adb-activation' | 'partial' => {
+    const explicitMode = activationResult.details?.activationMode;
+    if (explicitMode === 'safe-stub' || explicitMode === 'adb-activation' || explicitMode === 'partial') {
+        return explicitMode;
+    }
+
+    if (activationResult.success) return 'adb-activation';
+    return activationResult.details?.safeStub === true ? 'safe-stub' : 'partial';
+};
+
 interface SessionManagerLike {
     startSessionIfNeeded(): Promise<{
         created: boolean,
@@ -72,6 +83,7 @@ export class AndroidAdbStartHeadlessService {
         });
 
         const controlPlaneSuccess = activationResult.success === true;
+        const activationMode = resolveActivationMode(activationResult);
         const dataPlaneObserved = activationResult.dataPlaneObserved === true ||
             ((input.waitForTraffic ?? true) ? (await this.sessionManager.getObservedTrafficSignal({ waitMs: 250, pollIntervalMs: 100 })).observed : false);
         const targetTrafficObserved = activationResult.targetTrafficObserved === true ||
@@ -113,7 +125,8 @@ export class AndroidAdbStartHeadlessService {
                     proxyPort: session.proxyPort,
                     errors: activationResult.errors ?? []
                 },
-                lastNetworkInspection: networkInspection
+                lastNetworkInspection: networkInspection,
+                activationMode
             }),
             errors: success
                 ? []
@@ -189,7 +202,8 @@ export class AndroidAdbStartHeadlessService {
                 proxyPort: options.proxyPort,
                 errors: options.errors
             },
-            ...(options.networkInspection ? { lastNetworkInspection: options.networkInspection } : {})
+            ...(options.networkInspection ? { lastNetworkInspection: options.networkInspection } : {}),
+            activationMode: 'partial'
         });
 
         return {
