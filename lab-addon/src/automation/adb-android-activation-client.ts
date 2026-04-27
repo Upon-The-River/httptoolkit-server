@@ -58,7 +58,7 @@ export class AdbAndroidActivationClient implements AndroidActivationClient {
     constructor(
         private readonly adbExecutor: AdbExecutor = new SystemAdbExecutor(),
         private readonly fetchImpl: typeof fetch = fetch,
-        private readonly officialAdminBaseUrl = process.env.LAB_ADDON_OFFICIAL_ADMIN_BASE_URL ?? 'http://127.0.0.1:45456'
+        private readonly officialAdminBaseUrl = process.env.LAB_ADDON_OFFICIAL_ADMIN_BASE_URL ?? 'http://127.0.0.1:45458'
     ) {}
 
     private async tryOfficialBridge(options: AndroidActivationRequest): Promise<AndroidActivationResult | undefined> {

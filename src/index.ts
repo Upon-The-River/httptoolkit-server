@@ -34,6 +34,7 @@ import {
 import { clearWebExtensionConfig, updateWebExtensionConfig } from './webextension';
 import { HttpClient } from './client/http-client';
 import { LiveExportAddonBridge } from './export/live-export-addon-bridge';
+import { startAndroidActivationBridgeServer } from './automation/android-activation-bridge-server';
 
 async function generateHTTPSConfig(configPath: string) {
     const keyPath = path.join(configPath, 'ca.key');
@@ -291,6 +292,14 @@ export async function runHTK(options: {
     });
 
     await apiServer.start();
+    const androidActivationBridgeServer = await startAndroidActivationBridgeServer({
+        apiModel: apiServer.getApiModel()
+    });
+    if (androidActivationBridgeServer) {
+        addShutdownHandler(() => new Promise<void>((resolve, reject) => {
+            androidActivationBridgeServer.close((err) => err ? reject(err) : resolve());
+        }));
+    }
 
     console.log('Server started in', Date.now() - standaloneSetupTime, 'ms');
     console.log('Total startup took', Date.now() - startTime, 'ms');

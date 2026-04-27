@@ -45,7 +45,7 @@ describe('AdbAndroidActivationClient', () => {
         });
 
         assert.equal(result.success, true);
-        assert.equal(fetchCalls[0], 'http://127.0.0.1:45456/automation/android-adb/start-headless');
+        assert.equal(fetchCalls[0], 'http://127.0.0.1:45458/automation/android-adb/start-headless');
         assert.equal(fakeAdb.shellCalls.length, 0);
     });
 
@@ -138,7 +138,7 @@ describe('AdbAndroidActivationClient', () => {
         assert.equal(fetchCalls[0], 'http://127.0.0.1:55555/automation/android-adb/start-headless');
     });
 
-    it('does not fallback to addon 45457 when default official bridge is unavailable', async () => {
+    it('does not call 45456 or fallback to addon 45457 when default official bridge is unavailable', async () => {
         const fakeAdb = new FakeAdbExecutor([], () => '');
         const fetchCalls: string[] = [];
         const fakeFetch: typeof fetch = (async (url: string | URL | Request) => {
@@ -154,7 +154,8 @@ describe('AdbAndroidActivationClient', () => {
         });
 
         assert.equal(fetchCalls.length, 1);
-        assert.equal(fetchCalls[0], 'http://127.0.0.1:45456/automation/android-adb/start-headless');
+        assert.equal(fetchCalls[0], 'http://127.0.0.1:45458/automation/android-adb/start-headless');
+        assert.equal(fetchCalls.some((url) => url.includes('45456')), false);
         assert.equal(fetchCalls.some((url) => url.includes('45457')), false);
     });
 

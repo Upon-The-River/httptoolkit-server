@@ -2,105 +2,57 @@
 
 ## Why addon-only was insufficient
 
-`lab-addon` can send the Android ACTIVATE intent, but addon-only mode cannot reliably confirm full official control-plane readiness when the official server does not expose a compatible activation bridge route.
+`lab-addon` can send Android ACTIVATE intents, but addon-only mode cannot prove official interceptor/session readiness without an official bridge endpoint.
 
-To close that gap with the smallest possible core surface, this change adds a minimal official route bridge that:
+## Port split
 
-- accepts addon/PowerShell-compatible automation route shapes
-- reuses official interceptor activation (`apiModel.activateInterceptor('android-adb', ...)`)
-- can allocate a proxy port by creating a Mockttp remote session only when needed
+- `45456` = Mockttp admin API. It will not host `/automation/*` routes.
+- `45457` = official REST/GraphQL API + `lab-addon` compatibility routes.
+- `45458` = dedicated official Android activation bridge (local-only, opt-in).
 
-No Qidian/export/rescue/device-governance logic is moved into core.
+Using a dedicated bridge port avoids the previous route/port confusion where `/automation/*` logic was added to `src/api/rest-api.ts` even though consumers were checking `45456`.
 
 ## Official files changed
 
 - `src/api/rest-api.ts`
-  - Added `GET /automation/health`
-  - Added `POST /automation/android-adb/start-headless`
-  - Added a tiny `ensureProxyPort` hook (default: reuse request proxyPort or create a Mockttp remote session on 45456)
+  - Removed `/automation/*` bridge routes from the REST API surface.
+- `src/automation/android-activation-bridge-server.ts`
+  - Added dedicated bridge server on `127.0.0.1`.
+  - Routes:
+    - `GET /automation/health`
+    - `POST /automation/android-adb/start-headless`
+  - Uses `apiModel.getInterceptorMetadata()` and `apiModel.activateInterceptor('android-adb', ...)`.
+  - Ensures/creates proxy port via Mockttp admin (`45456`) only when needed.
+- `src/api/api-server.ts`
+  - Exposes `getApiModel()` for minimal bridge startup wiring.
+- `src/index.ts`
+  - Starts bridge only when `HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED=true`.
+  - Port controlled by `HTK_ANDROID_ACTIVATION_BRIDGE_PORT` (default `45458`).
+  - Server continues unchanged when disabled.
 - `test/unit/rest-api-automation-bridge.spec.ts`
-  - Bridge route success/failure/shape tests
-  - Safety assertion that no Qidian text appears in the bridge module
+  - Tests disabled-by-default behavior, enabled health route, activation call path, localhost binding, failure structure, and no-Qidian guard.
 
 ## Addon files changed
 
 - `lab-addon/src/automation/adb-android-activation-client.ts`
-  - Tries official bridge first before ADB-intent-only fallback
-  - Configurable official admin base URL:
-    - `LAB_ADDON_OFFICIAL_ADMIN_BASE_URL`
-    - default `http://127.0.0.1:45456`
-  - Never falls back to `http://127.0.0.1:45457` (addon server) to avoid recursive self-calls
-  - If the official bridge is 404/unreachable, falls back to partial ADB intent mode
+  - Default official bridge URL changed to `http://127.0.0.1:45458`.
+  - `LAB_ADDON_OFFICIAL_ADMIN_BASE_URL` still overrides.
 - `lab-addon/test/adb-android-activation-client.spec.ts`
-  - official bridge success path
-  - 404 fallback path
-  - structured bridge failure path
-  - configurable admin base URL path
+  - Updated defaults and assertions so client does not call `45456` or `45457` by default.
 - `lab-addon/README.md`
-  - documented official bridge-first behavior and environment variable
+  - Updated port mapping and bridge validation examples.
 
-## Compatibility route shapes
+## Bridge env vars
 
-- `GET /automation/health`
-- `POST /automation/android-adb/start-headless`
-
-Request body (bridge):
-
-```json
-{
-  "deviceId": "device-serial",
-  "proxyPort": 8000,
-  "enableSocks": false,
-  "allowUnsafeStart": true
-}
-```
-
-Response shape (bridge):
-
-```json
-{
-  "success": true,
-  "deviceId": "device-serial",
-  "proxyPort": 8000,
-  "controlPlaneSuccess": true,
-  "session": { "active": true, "created": false, "source": "requested" },
-  "activationResult": { "success": true, "metadata": {} },
-  "errors": []
-}
-```
-
-## Old route compatibility result
-
-- Core now exposes compatibility automation routes at the official REST API surface.
-- Addon start-headless now delegates to official bridge first; when unavailable, it preserves previous partial ADB-intent fallback behavior.
-
-## Rollback plan
-
-1. Revert `src/api/rest-api.ts` bridge endpoints and helper.
-2. Revert addon client bridge-first call path in `lab-addon/src/automation/adb-android-activation-client.ts`.
-3. Keep addon fallback intent mode untouched.
-
-Rollback impact: start-headless returns to previous partial behavior when no official bridge exists.
-
-## Why Qidian/export/rescue logic stays out of core
-
-This bridge intentionally handles only:
-
-- proxy/session port resolution
-- official Android ADB interceptor activation
-- structured route compatibility response
-
-It does **not** include:
-
-- Qidian traffic matching
-- JSONL/live export policy
-- Android rescue or safety governance orchestration
-- addon runtime file/process management
+- `HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED=true` (required to start the bridge)
+- `HTK_ANDROID_ACTIVATION_BRIDGE_PORT` (optional, default `45458`)
+- `LAB_ADDON_OFFICIAL_ADMIN_BASE_URL` (addon override for bridge base URL)
 
 ## Validation commands
 
 ```bash
-npm run test:unit -- test/unit/rest-api-automation-bridge.spec.ts
-cd lab-addon && npm run typecheck
-cd lab-addon && npm test
+curl http://127.0.0.1:45458/automation/health
+curl -X POST http://127.0.0.1:45457/automation/android-adb/start-headless \
+  -H 'content-type: application/json' \
+  -d '{"deviceId":"<id>","proxyPort":8000,"enableSocks":false,"allowUnsafeStart":true}'
 ```

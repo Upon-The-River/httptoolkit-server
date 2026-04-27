@@ -48,8 +48,8 @@ Rescue limitations in this slice:
 Behavior summary:
 
 - Tries official bridge activation first:
-  - `POST ${LAB_ADDON_OFFICIAL_ADMIN_BASE_URL:-http://127.0.0.1:45456}/automation/android-adb/start-headless`
-  - If default `45456` route is missing (`404`), addon also attempts `http://127.0.0.1:45457/automation/android-adb/start-headless` for compatibility.
+  - `POST ${LAB_ADDON_OFFICIAL_ADMIN_BASE_URL:-http://127.0.0.1:45458}/automation/android-adb/start-headless`
+  - No automatic fallback to `45456` (Mockttp admin) or `45457` (lab-addon API) is attempted.
 - Verifies the requested `deviceId` is online in `adb devices` output.
 - Collects basic device info (`ro.product.model`, `ro.build.version.release`).
 - Sends HTTP Toolkit Android ACTIVATE intent via ADB shell:
@@ -70,8 +70,14 @@ Current limitations:
 Official bridge base URL environment variable:
 
 - `LAB_ADDON_OFFICIAL_ADMIN_BASE_URL`
-  - default: `http://127.0.0.1:45456`
+  - default: `http://127.0.0.1:45458`
   - set this to override where addon sends official bridge activation requests.
+
+Local port map:
+
+- `45456`: Mockttp admin only (`/start`, `/session`, etc). It does not serve `/automation/*`.
+- `45457`: lab-addon server routes.
+- `45458`: official Android activation bridge (`HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED=true`).
 
 Expected PowerShell request:
 
@@ -90,6 +96,7 @@ curl http://127.0.0.1:45457/automation/health
 Validate official bridge directly (PowerShell):
 
 ```powershell
+Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:45458/automation/health"
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:45457/automation/android-adb/start-headless" -ContentType "application/json" -Body '{"deviceId":"<id>","proxyPort":8000,"enableSocks":false,"allowUnsafeStart":true}'
 ```
 
