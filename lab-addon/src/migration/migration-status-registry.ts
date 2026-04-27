@@ -1,8 +1,12 @@
+import { loadHeadlessConfig } from '../headless/headless-config';
 import {
     MigrationCapability,
     MigrationStatusRegistryResponse,
     MigrationStatusSummary
 } from './migration-status-types';
+
+const headlessConfig = loadHeadlessConfig();
+const headlessUsesLocalProcess = headlessConfig.backend === 'local-process';
 
 export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
     {
@@ -110,30 +114,36 @@ export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
         method: 'POST',
         path: '/headless/start',
         domain: 'headless',
-        status: 'safe-stub',
+        status: headlessUsesLocalProcess ? 'implemented' : 'safe-stub',
         mutatesDeviceState: false,
         description: 'Placeholder for future headless startup orchestration.',
-        notes: 'Intentional safe no-op until full migration approval.'
+        notes: headlessUsesLocalProcess
+            ? 'Implemented via optional local-process backend when explicitly configured.'
+            : 'Intentional safe no-op until full migration approval.'
     },
     {
         id: 'headless-stop',
         method: 'POST',
         path: '/headless/stop',
         domain: 'headless',
-        status: 'safe-stub',
+        status: headlessUsesLocalProcess ? 'implemented' : 'safe-stub',
         mutatesDeviceState: false,
         description: 'Placeholder for future headless shutdown orchestration.',
-        notes: 'Intentional safe no-op to avoid recursive script calls.'
+        notes: headlessUsesLocalProcess
+            ? 'Implemented only for addon-tracked local processes; does not kill arbitrary processes.'
+            : 'Intentional safe no-op to avoid recursive script calls.'
     },
     {
         id: 'headless-recover',
         method: 'POST',
         path: '/headless/recover',
         domain: 'headless',
-        status: 'safe-stub',
+        status: headlessUsesLocalProcess ? 'implemented' : 'safe-stub',
         mutatesDeviceState: false,
         description: 'Placeholder for future headless recovery orchestration.',
-        notes: 'Intentional safe no-op to avoid recursive script calls.'
+        notes: headlessUsesLocalProcess
+            ? 'Composes local stop/start without endpoint recursion when safely configured.'
+            : 'Intentional safe no-op to avoid recursive script calls.'
     },
     {
         id: 'headless-capabilities',

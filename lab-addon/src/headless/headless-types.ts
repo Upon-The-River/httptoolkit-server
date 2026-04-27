@@ -1,17 +1,28 @@
-export interface ProcessRunRequest {
+import { HeadlessBackendKind, HeadlessBackendStrategy } from './headless-backend-strategy';
+import { HeadlessProcessRecord } from './headless-process-registry';
+
+export interface DetachedSpawnRequest {
     command: string;
     args: string[];
-    timeoutMs?: number;
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
 }
 
-export interface ProcessRunResult {
-    exitCode: number;
-    stdout: string;
-    stderr: string;
+export interface DetachedSpawnResult {
+    ok: boolean;
+    processId?: number;
+    reason?: string;
+}
+
+export interface ProcessKillResult {
+    ok: boolean;
+    implemented: boolean;
+    reason?: string;
 }
 
 export interface ProcessRunner {
-    run(request: ProcessRunRequest): Promise<ProcessRunResult>;
+    spawnDetached(request: DetachedSpawnRequest): Promise<DetachedSpawnResult>;
+    kill?(processId: number): Promise<ProcessKillResult>;
 }
 
 export interface HeadlessActionCapability {
@@ -25,22 +36,20 @@ export interface HeadlessCapabilities {
     start: HeadlessActionCapability;
     stop: HeadlessActionCapability;
     recover: HeadlessActionCapability;
+    backend: {
+        active: HeadlessBackendKind;
+        strategies: HeadlessBackendStrategy[];
+        startCommandConfigured: boolean;
+    };
 }
 
 export interface HeadlessActionResult {
     ok: boolean;
     implemented: boolean;
     action: 'start' | 'stop' | 'recover';
+    backend: HeadlessBackendStrategy;
     reason?: string;
-    command?: {
-        command: string;
-        args: string[];
-    };
-    output?: {
-        stdout: string;
-        stderr: string;
-        exitCode: number;
-    };
+    process?: HeadlessProcessRecord;
 }
 
 export interface HeadlessHealthState {

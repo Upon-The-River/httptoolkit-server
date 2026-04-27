@@ -1,37 +1,53 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 
-import { ProcessRunRequest, ProcessRunResult, ProcessRunner } from './headless-types';
-
-const execFileAsync = promisify(execFile);
+import {
+    DetachedSpawnRequest,
+    DetachedSpawnResult,
+    ProcessKillResult,
+    ProcessRunner
+} from './headless-types';
 
 export class NodeProcessRunner implements ProcessRunner {
-    async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
-        try {
-            const result = await execFileAsync(request.command, request.args, {
-                timeout: request.timeoutMs ?? 30000,
-                windowsHide: true,
-                maxBuffer: 1024 * 1024
-            });
+    async spawnDetached(request: DetachedSpawnRequest): Promise<DetachedSpawnResult> {
+        return new Promise((resolve) => {
+            try {
+                const child = spawn(request.command, request.args, {
+                    detached: true,
+                    stdio: 'ignore',
+                    windowsHide: true,
+                    cwd: request.cwd,
+                    env: request.env
+                });
 
-            return {
-                exitCode: 0,
-                stdout: result.stdout ?? '',
-                stderr: result.stderr ?? ''
-            };
-        } catch (error) {
-            const typed = error as NodeJS.ErrnoException & {
-                code?: number | string;
-                stdout?: string;
-                stderr?: string;
-            };
+                child.once('error', (error) => {
+                    resolve({
+                        ok: false,
+                        reason: error.message
+                    });
+                });
 
-            const exitCode = typeof typed.code === 'number' ? typed.code : 1;
-            return {
-                exitCode,
-                stdout: typed.stdout ?? '',
-                stderr: typed.stderr ?? typed.message
-            };
-        }
+                child.once('spawn', () => {
+                    child.unref();
+                    resolve({
+                        ok: true,
+                        processId: child.pid
+                    });
+                });
+            } catch (error) {
+                const typed = error as Error;
+                resolve({
+                    ok: false,
+                    reason: typed.message
+                });
+            }
+        });
+    }
+
+    async kill(_processId: number): Promise<ProcessKillResult> {
+        return {
+            ok: false,
+            implemented: false,
+            reason: 'Safe cross-platform process termination is not implemented in NodeProcessRunner yet.'
+        };
     }
 }

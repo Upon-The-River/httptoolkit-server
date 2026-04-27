@@ -40,6 +40,24 @@ Rescue limitations in this slice:
 - high-risk actions are skipped
 - `clearPrivateDns` and `clearAlwaysOnVpn` are opt-in
 
+### Headless backend strategy
+
+Headless control uses an explicit backend strategy model:
+
+- `safe-stub` (default): conservative no-op mode for start/stop/recover.
+- `local-process`: optional backend enabled only when `LAB_ADDON_HEADLESS_BACKEND=local-process` and `LAB_ADDON_HEADLESS_START_COMMAND` are set.
+- `external-official-cli`: documented future backend option.
+- `core-hook-required`: documented fallback when addon-only integration is insufficient.
+
+Default behavior remains `safe-stub` unless explicitly configured.
+
+Safety guarantees:
+
+- The addon process registry tracks **only addon-started processes**.
+- The addon does **not** inspect, claim ownership of, or kill arbitrary external processes.
+- Server internals do **not** call client scripts with `-UseAddonServer`.
+- `/headless/*` endpoints do not recursively invoke other `/headless/*` endpoints.
+
 ### Headless control endpoints (addon standalone slice)
 
 - `GET /headless/health`
@@ -48,11 +66,11 @@ Rescue limitations in this slice:
   - Safe explicit stub until full start orchestration is migrated.
   - Returns `implemented: false` with reason.
 - `POST /headless/stop`
-  - Safe explicit stub until non-recursive stop orchestration is implemented.
-  - Returns `implemented: false` with reason.
+  - Safe explicit no-op by default.
+  - If local-process backend is enabled, only addon-registered process stop is attempted.
 - `POST /headless/recover`
-  - Safe explicit stub until non-recursive recovery orchestration is implemented.
-  - Returns `implemented: false` with reason.
+  - Safe explicit no-op by default.
+  - If local-process backend is enabled and safe stop/start are available, recover composes local stop + local start without recursion.
 - `GET /headless/capabilities`
   - Lists implemented vs pending headless actions.
 
@@ -211,6 +229,18 @@ Capabilities:
 curl http://127.0.0.1:45457/headless/capabilities
 ```
 
+Start (default safe-stub):
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/headless/start
+```
+
+Stop (default safe-stub unless local-process backend is configured):
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/headless/stop
+```
+
 PowerShell client entrypoints (operator-invoked scripts):
 
 ```powershell
@@ -226,3 +256,10 @@ PowerShell client entrypoints (operator-invoked scripts):
 The PowerShell scripts under `scripts/android/` are client entrypoints. They may call addon endpoints when `-UseAddonServer` is provided by the operator.
 
 Addon endpoints **must not** invoke those scripts in `-UseAddonServer` mode, because that creates recursive self-calls (endpoint -> script -> endpoint). Until a non-recursive implementation is available, `/headless/start`, `/headless/stop`, and `/headless/recover` remain explicit safe stubs.
+
+
+## Future headless implementation options
+
+- Local process backend hardening (safer cross-platform stop semantics).
+- External official CLI backend integration (non-recursive).
+- Minimal core hook, only when addon-only backend is proven insufficient and explicitly approved.
