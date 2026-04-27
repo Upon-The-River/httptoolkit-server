@@ -110,7 +110,8 @@ Safety guarantees:
   - Matches a synthetic HTTP event against target rules.
 - `POST /export/ingest`
   - Ingests a synthetic HTTP event and returns a normalized JSONL-compatible export record.
-  - Optional `{ "persist": true }` appends the normalized record to runtime JSONL output.
+  - Optional `{ "persist": true }` is **target-gated**: only events that match configured export targets are appended to runtime JSONL output.
+  - Unmatched events are still normalized and returned, but default behavior is `persisted=false` with `skippedPersistenceReason="no-target-matched"`.
 - `GET /export/output-status`
   - Returns runtime export output metadata (`runtimeRoot`, `exportDir`, `jsonlPath`, `exists`, `sizeBytes`).
 - `GET /export/stream`
@@ -161,6 +162,15 @@ curl -Method POST -Uri http://127.0.0.1:45457/export/ingest `
   -Body '{"persist":true,"event":{"timestamp":"2026-01-02T03:04:05.000Z","method":"GET","url":"https://example.com/api/books","statusCode":200,"responseHeaders":{"content-type":"application/json"},"responseBody":"{\"ok\":true}"}}'
 ```
 
+`POST /export/ingest` response includes:
+
+- `ok`
+- `record`
+- `match`
+- `persisted`
+- `outputPath` (only when persisted)
+- `skippedPersistenceReason` (for example `no-target-matched` when `persist=true` but no target matched)
+
 Check runtime output status:
 
 ```powershell
@@ -180,6 +190,8 @@ curl http://127.0.0.1:45457/export/stream
 ```
 
 This returns a clear JSON stub indicating that live streaming still requires a future minimal official core hook. No official HTTP Toolkit core files were modified for this addon export skeleton.
+
+When using the official-core live export hook, core may forward generic observed events with `persist=true`. Persistence remains addon-owned and target-gated, which prevents accidental full-traffic JSONL logging by default.
 
 ## Run locally
 

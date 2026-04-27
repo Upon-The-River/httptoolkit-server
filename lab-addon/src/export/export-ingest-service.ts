@@ -38,8 +38,10 @@ const getStableRecordId = (event: SyntheticHttpEvent, observedAt: string): strin
 
 export interface ExportIngestResult {
     record: NormalizedExportRecord;
+    match: ExportMatchResult;
     persisted: boolean;
     outputPath?: string;
+    skippedPersistenceReason?: 'no-target-matched';
 }
 
 export class ExportIngestService {
@@ -57,9 +59,8 @@ export class ExportIngestService {
         return Boolean(this.fileSink);
     }
 
-    normalize(event: SyntheticHttpEvent): NormalizedExportRecord {
+    normalize(event: SyntheticHttpEvent, matchResult: ExportMatchResult = this.match(event)): NormalizedExportRecord {
         const observedAt = event.observedAt ?? event.timestamp ?? new Date().toISOString();
-        const matchResult = this.match(event);
         const body = getEventBody(event);
 
         return {
@@ -79,19 +80,31 @@ export class ExportIngestService {
     }
 
     ingest(event: SyntheticHttpEvent, options: { persist?: boolean } = {}): ExportIngestResult {
-        const record = this.normalize(event);
+        const match = this.match(event);
+        const record = this.normalize(event, match);
 
-        if (options.persist && this.fileSink) {
+        if (options.persist && this.fileSink && match.matched) {
             const outputPath = this.fileSink.append(record);
             return {
                 record,
+                match,
                 persisted: true,
                 outputPath
             };
         }
 
+        if (options.persist && this.fileSink && !match.matched) {
+            return {
+                record,
+                match,
+                persisted: false,
+                skippedPersistenceReason: 'no-target-matched'
+            };
+        }
+
         return {
             record,
+            match,
             persisted: false
         };
     }

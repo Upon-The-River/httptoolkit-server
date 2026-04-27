@@ -24,6 +24,7 @@ Behavior:
 - Never adds Qidian-specific logic.
 - Never writes JSONL in core.
 - Never throws into the interception path on bridge failures.
+- May request `persist=true`, but addon persistence is target-gated.
 
 ## Current delivery payload
 
@@ -45,6 +46,16 @@ Behavior:
 ```
 
 For non-text responses, core attempts `bodyBase64`; if unavailable, payload is metadata-only.
+
+## Addon persistence semantics (target-gated default)
+
+`POST /export/ingest` now enforces target matching before JSONL persistence:
+
+- `persist=true` + matched target => write JSONL (`persisted=true`, `outputPath` returned).
+- `persist=true` + unmatched target => no JSONL write (`persisted=false`, `skippedPersistenceReason="no-target-matched"`).
+- unmatched events are still normalized and returned for observability/debugging.
+
+This keeps official core generic while ensuring addon rules control which traffic is actually persisted.
 
 ## Remaining gaps
 
