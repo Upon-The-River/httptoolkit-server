@@ -6,6 +6,7 @@ export interface AutomationHealthSnapshot {
     lastStopHeadless?: unknown;
     lastRecoverHeadless?: unknown;
     lastNetworkInspection?: unknown;
+    activationMode?: 'safe-stub' | 'adb-activation' | 'partial';
 }
 
 export class AutomationHealthStore {

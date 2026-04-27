@@ -40,6 +40,44 @@ Rescue limitations in this slice:
 - high-risk actions are skipped
 - `clearPrivateDns` and `clearAlwaysOnVpn` are opt-in
 
+
+### Android ADB start-headless activation (real addon implementation)
+
+`POST /automation/android-adb/start-headless` now uses a conservative ADB activation client by default (not the SafeStub route-only fallback).
+
+Behavior summary:
+
+- Verifies the requested `deviceId` is online in `adb devices` output.
+- Collects basic device info (`ro.product.model`, `ro.build.version.release`).
+- Sends HTTP Toolkit Android ACTIVATE intent via ADB shell:
+  - `am start -a tech.httptoolkit.android.ACTIVATE -d https://android.httptoolkit.tech/connect/?data=... -p tech.httptoolkit.android.v1`
+- Reads conservative connection signals (`dumpsys activity`, `logcat`, `dumpsys vpn`).
+- Returns structured activation result fields including:
+  - `implemented`
+  - `partial`
+  - `activationMode` (`adb-activation` or `partial`)
+  - `reason` and `errors` when activation is not fully confirmed.
+
+Current limitations:
+
+- Addon-only mode does not include the full official-core Android bridge (reverse tunnel lifecycle, certificate bridge, and full handshake confirmation path).
+- Therefore, the route can return a structured partial failure (`success=false`, `implemented=true`, `partial=true`) when intent dispatch succeeds but full connected-state confirmation is unavailable.
+- No reboot, uninstall, VPN-app-disable, or arbitrary process-kill behavior is used.
+
+Expected PowerShell request:
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/automation/android-adb/start-headless `
+  -ContentType 'application/json' `
+  -Body '{"deviceId":"emulator-5554","enableSocks":false}'
+```
+
+Check automation health (includes `activationMode`):
+
+```powershell
+curl http://127.0.0.1:45457/automation/health
+```
+
 ### Headless backend strategy
 
 Headless control uses an explicit backend strategy model:
