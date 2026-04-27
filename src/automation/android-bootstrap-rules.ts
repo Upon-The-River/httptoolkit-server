@@ -2,6 +2,8 @@ import { getRemote, Mockttp } from 'mockttp';
 
 import { ApiModel } from '../api/api-model';
 
+const TRUSTED_MOCKTTP_ORIGIN = 'https://app.httptoolkit.tech';
+
 export interface AndroidBootstrapResult {
     applied: boolean;
     proxyPort: number;
@@ -60,7 +62,14 @@ export async function prepareAndroidBootstrapRules(
 }
 
 async function startManagedSession(proxyPort: number): Promise<Pick<Mockttp, 'forGet' | 'forAnyRequest'>> {
-    const session = getRemote({ adminServerUrl: 'http://127.0.0.1:45456' });
+    const session = getRemote({
+        adminServerUrl: 'http://127.0.0.1:45456',
+        client: {
+            headers: {
+                origin: TRUSTED_MOCKTTP_ORIGIN
+            }
+        }
+    });
     await session.start(proxyPort);
     return session;
 }

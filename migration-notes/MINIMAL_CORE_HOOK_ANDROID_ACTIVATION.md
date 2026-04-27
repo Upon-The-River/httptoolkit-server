@@ -92,3 +92,42 @@ Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000
 Expected outcome after bootstrap preparation: Android bootstrap/certificate validation path should be handled by configured rules (not a raw default `503`).
 
 Control-plane success still does **not** prove VPN/data-plane success; verify Android traffic separately.
+
+## Mockttp admin 403 during bridge session preparation (April 27, 2026)
+
+Observed bridge failure after introducing dedicated bridge port `45458`:
+
+- Bridge route responded from `45458` correctly.
+- Internal session preparation attempted `http://127.0.0.1:45456/start?port=8000`.
+- Mockttp admin returned HTTP `403`.
+- Bridge reported:
+  - `controlPlaneSuccess=false`
+  - `bootstrapRulesApplied=false`
+  - `certificateAvailable=false`
+  - `errors=["activation-bridge-internal-error"]`
+
+### Root cause
+
+The bridge used `mockttp.getRemote({ adminServerUrl: "http://127.0.0.1:45456" })` without the trusted browser-style `Origin` header required by Mockttp admin CORS-gate policy.
+
+### Fix
+
+- Updated bridge session preparation to create remote Mockttp clients with:
+  - `Origin: https://app.httptoolkit.tech`
+- Updated bootstrap fallback session creation with the same trusted Origin.
+- Added explicit bridge status fields:
+  - `proxySessionPrepared` (true/false)
+  - structured `proxySessionError` details (`code`, `message`, `statusCode`) when session preparation fails.
+- Added explicit failure code:
+  - `errors=["proxy-session-preparation-failed"]`
+- Bridge now avoids activation attempts when proxy session preparation or bootstrap setup fails.
+
+### Validation command
+
+The raw admin endpoint can be checked directly (expected `403` without trusted Origin, success with trusted Origin):
+
+```bash
+curl -i -X POST "http://127.0.0.1:45456/start?port=8000"
+curl -i -X POST "http://127.0.0.1:45456/start?port=8000" \
+  -H "origin: https://app.httptoolkit.tech"
+```
