@@ -10,6 +10,7 @@ import {
     HeadlessActionResult,
     HeadlessCapabilities,
     HeadlessControlApi,
+    HeadlessStartOptions,
     ProcessRunnerCapabilities,
     ProcessRunner
 } from './headless-types';
@@ -26,6 +27,30 @@ const RECOVER_STUB_REASON = 'Recover is intentionally stubbed to avoid recursive
 const NO_REGISTERED_PROCESS_REASON = 'No addon-started headless process is registered.';
 const RUNNER_KILL_NOT_IMPLEMENTED_REASON = 'Configured process runner does not implement safe process kill.';
 
+interface ResolvedStartConfig {
+    backend: 'local-process' | 'safe-stub';
+    command?: string;
+    args: string[];
+    workingDir?: string;
+    env?: Record<string, string>;
+    dryRun: boolean;
+    validationErrors: string[];
+}
+
+const parseInlineArgs = (input: string): string[] => {
+    const trimmed = input.trim();
+    if (!trimmed) {
+        return [];
+    }
+
+    const matches = trimmed.match(/"[^"]*"|'[^']*'|\S+/g);
+    if (!matches) {
+        return [];
+    }
+
+    return matches.map((token) => token.replace(/^['"]|['"]$/g, '')).filter(Boolean);
+};
+
 export class HeadlessControlService implements HeadlessControlApi {
     private readonly processRunner: ProcessRunner;
     private readonly config: HeadlessConfig;
@@ -37,8 +62,25 @@ export class HeadlessControlService implements HeadlessControlApi {
         this.processRegistry = options.processRegistry ?? new HeadlessProcessRegistry();
     }
 
-    async start(): Promise<HeadlessActionResult> {
-        if (this.config.backend !== 'local-process' || !this.config.startCommand) {
+    getLatestProcess() {
+        return this.processRegistry.getLatest();
+    }
+
+    async start(options: HeadlessStartOptions = {}): Promise<HeadlessActionResult> {
+        const resolved = this.resolveStartConfig(options);
+
+        if (resolved.validationErrors.length > 0) {
+            return {
+                ok: false,
+                implemented: false,
+                action: 'start',
+                backend: resolved.backend === 'local-process' ? localProcessStrategy : safeStubStrategy,
+                reason: 'Headless start configuration is invalid.',
+                validationErrors: resolved.validationErrors
+            };
+        }
+
+        if (resolved.backend !== 'local-process' || !resolved.command) {
             return {
                 ok: false,
                 implemented: false,
@@ -48,15 +90,35 @@ export class HeadlessControlService implements HeadlessControlApi {
             };
         }
 
+        const startPlan = {
+            command: resolved.command,
+            args: resolved.args,
+            workingDir: resolved.workingDir,
+            envKeys: Object.keys(resolved.env ?? {}).sort()
+        };
+
+        if (resolved.dryRun) {
+            return {
+                ok: true,
+                implemented: true,
+                action: 'start',
+                backend: localProcessStrategy,
+                dryRun: true,
+                startPlan
+            };
+        }
+
         const spawnResult = await this.processRunner.spawnDetached({
-            command: this.config.startCommand,
-            args: this.config.startArgs
+            command: resolved.command,
+            args: resolved.args,
+            cwd: resolved.workingDir,
+            env: resolved.env
         });
 
         if (!spawnResult.ok) {
             const failedRecord = this.processRegistry.recordStarted({
-                command: this.config.startCommand,
-                args: this.config.startArgs,
+                command: resolved.command,
+                args: resolved.args,
                 status: 'failed',
                 metadata: { backend: 'local-process' }
             });
@@ -73,8 +135,8 @@ export class HeadlessControlService implements HeadlessControlApi {
 
         const process = this.processRegistry.recordStarted({
             processId: spawnResult.processId,
-            command: this.config.startCommand,
-            args: this.config.startArgs,
+            command: resolved.command,
+            args: resolved.args,
             status: spawnResult.processId ? 'running' : 'unknown',
             metadata: { backend: 'local-process' }
         });
@@ -84,6 +146,7 @@ export class HeadlessControlService implements HeadlessControlApi {
             implemented: true,
             action: 'start',
             backend: localProcessStrategy,
+            dryRun: false,
             process
         };
     }
@@ -201,7 +264,7 @@ export class HeadlessControlService implements HeadlessControlApi {
             };
         }
 
-        const startResult = await this.start();
+        const startResult = await this.start({ dryRun: false });
         if (!startResult.ok) {
             return {
                 ok: false,
@@ -223,13 +286,15 @@ export class HeadlessControlService implements HeadlessControlApi {
     }
 
     getCapabilities(): HeadlessCapabilities {
-        const activeStrategy = this.config.backend === 'local-process' && this.config.startCommand
+        const hasValidationErrors = this.config.validationErrors.length > 0;
+        const startCommandConfigured = this.config.backend === 'local-process' && Boolean(this.config.startCommand);
+        const activeStrategy = startCommandConfigured
             ? localProcessStrategy
             : safeStubStrategy;
         const runnerCapabilities = this.getProcessRunnerCapabilities();
 
-        const startImplemented = activeStrategy.kind === 'local-process';
-        const stopImplemented = activeStrategy.kind === 'local-process' && runnerCapabilities.kill.implemented;
+        const startImplemented = activeStrategy.kind === 'local-process' && !hasValidationErrors;
+        const stopImplemented = startImplemented && runnerCapabilities.kill.implemented;
         const recoverImplemented = startImplemented && stopImplemented;
 
         const stopReason = activeStrategy.kind !== 'local-process'
@@ -244,7 +309,13 @@ export class HeadlessControlService implements HeadlessControlApi {
             start: {
                 implemented: startImplemented,
                 mutatesDeviceState: false,
-                ...(startImplemented ? {} : { reason: START_STUB_REASON })
+                ...(startImplemented
+                    ? {}
+                    : {
+                        reason: hasValidationErrors
+                            ? 'Headless start configuration is invalid.'
+                            : START_STUB_REASON
+                    })
             },
             stop: {
                 implemented: stopImplemented,
@@ -259,8 +330,59 @@ export class HeadlessControlService implements HeadlessControlApi {
             backend: {
                 active: activeStrategy.kind,
                 strategies: allHeadlessBackendStrategies,
-                startCommandConfigured: Boolean(this.config.startCommand)
+                startCommandConfigured,
+                canDryRunStart: true,
+                canExecuteStart: startImplemented,
+                ...(hasValidationErrors ? { validationErrors: this.config.validationErrors } : {})
             }
+        };
+    }
+
+    private resolveStartConfig(options: HeadlessStartOptions): ResolvedStartConfig {
+        const useRequestOverride =
+            options.backend !== undefined ||
+            options.command !== undefined ||
+            options.args !== undefined ||
+            options.workingDir !== undefined ||
+            options.env !== undefined ||
+            options.dryRun !== undefined;
+
+        const validationErrors = [...this.config.validationErrors];
+
+        const backend = (options.backend ?? this.config.backend) === 'local-process' ? 'local-process' : 'safe-stub';
+        const command = options.command?.trim() || this.config.startCommand;
+
+        let args: string[];
+        if (Array.isArray(options.args)) {
+            args = options.args.filter((value): value is string => typeof value === 'string');
+        } else if (typeof options.args === 'string') {
+            args = parseInlineArgs(options.args);
+        } else {
+            args = this.config.startArgs;
+        }
+
+        const workingDir = options.workingDir?.trim() || this.config.workingDir;
+        const env = options.env ? { ...options.env } : this.config.startEnv;
+
+        if (options.env) {
+            const invalidEnvEntry = Object.entries(options.env).find(([, value]) => typeof value !== 'string');
+            if (invalidEnvEntry) {
+                validationErrors.push(`start env value for "${invalidEnvEntry[0]}" must be a string.`);
+            }
+        }
+
+        if (useRequestOverride && options.backend === 'local-process' && !command) {
+            validationErrors.push('Headless local-process start requires a non-empty command.');
+        }
+
+        return {
+            backend,
+            command,
+            args,
+            workingDir,
+            env,
+            dryRun: useRequestOverride ? options.dryRun !== false : options.dryRun === true ? true : false,
+            validationErrors
         };
     }
 

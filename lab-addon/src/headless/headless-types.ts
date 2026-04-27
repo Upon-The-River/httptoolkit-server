@@ -5,7 +5,7 @@ export interface DetachedSpawnRequest {
     command: string;
     args: string[];
     cwd?: string;
-    env?: NodeJS.ProcessEnv;
+    env?: Record<string, string>;
 }
 
 export interface DetachedSpawnResult {
@@ -46,7 +46,17 @@ export interface HeadlessCapabilities {
         active: HeadlessBackendKind;
         strategies: HeadlessBackendStrategy[];
         startCommandConfigured: boolean;
+        canDryRunStart: boolean;
+        canExecuteStart: boolean;
+        validationErrors?: string[];
     };
+}
+
+export interface HeadlessStartPlan {
+    command: string;
+    args: string[];
+    workingDir?: string;
+    envKeys: string[];
 }
 
 export interface HeadlessActionResult {
@@ -56,6 +66,9 @@ export interface HeadlessActionResult {
     backend: HeadlessBackendStrategy;
     reason?: string;
     process?: HeadlessProcessRecord;
+    dryRun?: boolean;
+    startPlan?: HeadlessStartPlan;
+    validationErrors?: string[];
 }
 
 export interface HeadlessHealthState {
@@ -65,6 +78,9 @@ export interface HeadlessHealthState {
     startImplemented: boolean;
     stopImplemented: boolean;
     recoverImplemented: boolean;
+    backend: HeadlessBackendKind;
+    configuredStartAvailable: boolean;
+    latestProcess?: HeadlessProcessRecord;
     lastAction?: {
         action: 'start' | 'stop' | 'recover';
         ok: boolean;
@@ -73,9 +89,20 @@ export interface HeadlessHealthState {
     };
 }
 
+export interface HeadlessStartOptions {
+    deviceId?: string;
+    backend?: HeadlessBackendKind;
+    command?: string;
+    args?: string[] | string;
+    workingDir?: string;
+    env?: Record<string, string>;
+    dryRun?: boolean;
+}
+
 export interface HeadlessControlApi {
-    start(options?: { deviceId?: string }): Promise<HeadlessActionResult>;
+    start(options?: HeadlessStartOptions): Promise<HeadlessActionResult>;
     stop(options?: { deviceId?: string }): Promise<HeadlessActionResult>;
     recover(options?: { deviceId?: string }): Promise<HeadlessActionResult>;
     getCapabilities(): HeadlessCapabilities;
+    getLatestProcess?(): HeadlessProcessRecord | undefined;
 }

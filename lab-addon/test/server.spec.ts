@@ -78,7 +78,9 @@ const baseHeadlessControl: HeadlessControlApi = {
         backend: {
             active: 'safe-stub',
             strategies: [safeStubStrategy],
-            startCommandConfigured: false
+            startCommandConfigured: false,
+            canDryRunStart: true,
+            canExecuteStart: false
         }
     })
 };
@@ -467,6 +469,8 @@ describe('lab addon service endpoints', () => {
         assert.equal(body.startImplemented, false);
         assert.equal(body.stopImplemented, false);
         assert.equal(body.recoverImplemented, false);
+        assert.equal(body.backend, 'safe-stub');
+        assert.equal(body.configuredStartAvailable, false);
     });
 
     it('returns safe start stub at /headless/start', async () => {
@@ -525,7 +529,9 @@ describe('lab addon service endpoints', () => {
             backend: {
                 active: 'safe-stub',
                 strategies: [safeStubStrategy],
-                startCommandConfigured: false
+                startCommandConfigured: false,
+                canDryRunStart: true,
+                canExecuteStart: false
             }
         });
     });
@@ -657,6 +663,144 @@ describe('lab addon service endpoints', () => {
         assert.equal(statusBody.exists, true);
         assert.equal(statusBody.sizeBytes > 0, true);
         assert.equal(statusBody.jsonlPath, body.outputPath);
+    });
+
+
+    it('POST /headless/start with dryRun request returns plan and does not spawn', async () => {
+        const calls: unknown[] = [];
+        const headlessControl: HeadlessControlApi = {
+            ...baseHeadlessControl,
+            start: async (options) => {
+                calls.push(options);
+                return {
+                    ok: true,
+                    implemented: true,
+                    action: 'start',
+                    backend: {
+                        ...safeStubStrategy,
+                        kind: 'local-process',
+                        implemented: true,
+                        mutatesHostProcessState: true
+                    },
+                    dryRun: true,
+                    startPlan: {
+                        command: 'node',
+                        args: ['./bin/run', 'start'],
+                        workingDir: '/official/server',
+                        envKeys: ['NODE_ENV']
+                    }
+                };
+            }
+        };
+
+        const { baseUrl } = await startTestServer(createApp({ headlessControl }));
+        const response = await fetch(`${baseUrl}/headless/start`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                backend: 'local-process',
+                command: 'node',
+                args: ['./bin/run', 'start'],
+                env: { NODE_ENV: 'production' }
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.dryRun, true);
+        assert.equal(body.startPlan.command, 'node');
+        assert.equal(calls.length, 1);
+        assert.equal((calls[0] as { dryRun?: boolean }).dryRun, true);
+    });
+
+    it('POST /headless/start with dryRun=false can return process from injected control', async () => {
+        const headlessControl: HeadlessControlApi = {
+            ...baseHeadlessControl,
+            start: async () => ({
+                ok: true,
+                implemented: true,
+                action: 'start',
+                backend: {
+                    ...safeStubStrategy,
+                    kind: 'local-process',
+                    implemented: true,
+                    mutatesHostProcessState: true
+                },
+                dryRun: false,
+                process: {
+                    processId: 1234,
+                    command: 'node',
+                    args: ['./bin/run', 'start'],
+                    startedAt: '2026-01-01T00:00:00.000Z',
+                    status: 'running',
+                    metadata: { owner: 'lab-addon-headless' }
+                }
+            }),
+            getLatestProcess: () => ({
+                processId: 1234,
+                command: 'node',
+                args: ['./bin/run', 'start'],
+                startedAt: '2026-01-01T00:00:00.000Z',
+                status: 'running',
+                metadata: { owner: 'lab-addon-headless' }
+            }),
+            getCapabilities: () => ({
+                ...baseHeadlessControl.getCapabilities(),
+                start: { implemented: true, mutatesDeviceState: false },
+                backend: {
+                    active: 'local-process',
+                    strategies: [safeStubStrategy],
+                    startCommandConfigured: true,
+                    canDryRunStart: true,
+                    canExecuteStart: true
+                }
+            })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({ headlessControl }));
+        const response = await fetch(`${baseUrl}/headless/start`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ backend: 'local-process', command: 'node', args: ['./bin/run', 'start'], dryRun: false })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.dryRun, false);
+        assert.equal(body.process.processId, 1234);
+
+        const healthResponse = await fetch(`${baseUrl}/headless/health`);
+        assert.equal(healthResponse.status, 200);
+        const healthBody = await healthResponse.json();
+        assert.equal(healthBody.latestProcess.processId, 1234);
+        assert.equal(healthBody.backend, 'local-process');
+        assert.equal(healthBody.configuredStartAvailable, true);
+    });
+
+    it('GET /headless/capabilities reports configured start availability', async () => {
+        const headlessControl: HeadlessControlApi = {
+            ...baseHeadlessControl,
+            getCapabilities: () => ({
+                ...baseHeadlessControl.getCapabilities(),
+                backend: {
+                    active: 'local-process',
+                    strategies: [safeStubStrategy],
+                    startCommandConfigured: true,
+                    canDryRunStart: true,
+                    canExecuteStart: true
+                },
+                start: { implemented: true, mutatesDeviceState: false }
+            })
+        };
+
+        const { baseUrl } = await startTestServer(createApp({ headlessControl }));
+        const response = await fetch(`${baseUrl}/headless/capabilities`);
+        assert.equal(response.status, 200);
+
+        const body = await response.json();
+        assert.equal(body.backend.startCommandConfigured, true);
+        assert.equal(body.backend.canDryRunStart, true);
+        assert.equal(body.backend.canExecuteStart, true);
     });
 
     it('returns /export/output-status when output file does not yet exist', async () => {

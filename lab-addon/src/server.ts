@@ -55,7 +55,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const matchTraffic = options.matchTraffic ?? matchQidianTraffic;
     const androidNetworkSafety = options.androidNetworkSafety ?? new AndroidNetworkSafetyService();
     const headlessControl = options.headlessControl ?? new HeadlessControlService();
-    const headlessHealth = options.headlessHealth ?? new HeadlessHealthService(headlessControl.getCapabilities());
+    const headlessHealth = options.headlessHealth ?? new HeadlessHealthService({
+        getCapabilities: () => headlessControl.getCapabilities(),
+        getLatestProcess: () => headlessControl.getLatestProcess?.()
+    });
     const exportTargetsLoader = options.exportTargetsLoader ?? loadExportTargetsConfig;
     let exportIngestService = options.exportIngestService;
     let exportFileSink = options.exportFileSink;
@@ -138,8 +141,28 @@ export function createApp(options: CreateAppOptions = {}): Express {
     });
 
     app.post('/headless/start', asyncHandler(async (req: Request, res: Response) => {
+        const hasOverrides =
+            req.body?.backend !== undefined ||
+            req.body?.command !== undefined ||
+            req.body?.args !== undefined ||
+            req.body?.workingDir !== undefined ||
+            req.body?.env !== undefined ||
+            req.body?.dryRun !== undefined;
+
         const deviceId = typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined;
-        const result = await headlessControl.start({ deviceId });
+        const result = await headlessControl.start({
+            deviceId,
+            backend: req.body?.backend === 'local-process' || req.body?.backend === 'safe-stub' ? req.body.backend : undefined,
+            command: typeof req.body?.command === 'string' ? req.body.command : undefined,
+            args: Array.isArray(req.body?.args)
+                ? req.body.args.filter((value: unknown): value is string => typeof value === 'string')
+                : (typeof req.body?.args === 'string' ? req.body.args : undefined),
+            workingDir: typeof req.body?.workingDir === 'string' ? req.body.workingDir : undefined,
+            env: req.body?.env && typeof req.body.env === 'object' && !Array.isArray(req.body.env)
+                ? Object.fromEntries(Object.entries(req.body.env).filter(([, value]) => typeof value === 'string')) as Record<string, string>
+                : undefined,
+            dryRun: typeof req.body?.dryRun === 'boolean' ? req.body.dryRun : (hasOverrides ? true : undefined)
+        });
         headlessHealth.trackAction(result);
         res.json(result);
     }));
