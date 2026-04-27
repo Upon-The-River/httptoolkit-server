@@ -2,6 +2,8 @@
 
 Date: 2026-04-27
 
+Update: 2026-04-27 (persistence semantics)
+
 ## Exact files changed
 
 Official core:
@@ -10,11 +12,10 @@ Official core:
 - `test/unit/live-export-addon-bridge.spec.ts`
 
 Addon/migration docs:
-- `lab-addon/src/export/export-types.ts`
 - `lab-addon/src/export/export-ingest-service.ts`
+- `lab-addon/test/server.spec.ts`
 - `lab-addon/test/export-ingest-service.spec.ts`
-- `lab-addon/src/export/export-capabilities.ts`
-- `lab-addon/src/migration/migration-status-registry.ts`
+- `lab-addon/README.md`
 - `lab-addon/docs/CORE_HOOK_PROPOSAL_live_export.md`
 - `migration-notes/MINIMAL_CORE_HOOK_LIVE_EXPORT.md`
 
@@ -110,3 +111,15 @@ Core bridge only forwards generic HTTP observation metadata/body. Target matchin
 - Bridge is best-effort fire-and-forget and intentionally does not block request/response flow.
 - Failures/timeouts do not crash core; events may be dropped if addon is unavailable.
 - `/export/stream` remains non-streaming (`requires-core-hook`) in addon status endpoints.
+
+## Persistence semantics (safety update)
+
+Addon `/export/ingest` now gates persistence by export-target match:
+
+- `persist=true` and event matches at least one configured target => JSONL append.
+- `persist=true` and event does not match targets => no JSONL append, response includes:
+  - `persisted: false`
+  - `skippedPersistenceReason: "no-target-matched"`
+- response always includes normalized `record` and `match` for debugging and traceability.
+
+This means core can remain generic (including `persist=true` default) without causing full-traffic persistence. Actual persistence remains addon-owned and target-rule controlled.

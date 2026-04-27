@@ -622,9 +622,12 @@ describe('lab addon service endpoints', () => {
         assert.equal(body.ok, true);
         assert.equal(body.record.schemaVersion, 1);
         assert.equal(body.record.matchedTarget, 'target-a');
+        assert.equal(body.match.matched, true);
+        assert.equal(body.match.targetName, 'target-a');
         assert.equal(body.record.contentType, 'application/json');
         assert.equal(body.persisted, false);
         assert.equal(body.outputPath, undefined);
+        assert.equal(body.skippedPersistenceReason, undefined);
     });
 
     it('persists /export/ingest records when persist=true using runtime JSONL sink', async () => {
@@ -653,9 +656,12 @@ describe('lab addon service endpoints', () => {
         assert.equal(response.status, 200);
         const body = await response.json();
         assert.equal(body.ok, true);
+        assert.equal(body.match.matched, true);
+        assert.equal(body.match.targetName, 'target-a');
         assert.equal(body.persisted, true);
         assert.equal(typeof body.outputPath, 'string');
         assert.equal(body.record.matchedTarget, 'target-a');
+        assert.equal(body.skippedPersistenceReason, undefined);
 
         const statusResponse = await fetch(`${baseUrl}/export/output-status`);
         assert.equal(statusResponse.status, 200);
@@ -663,6 +669,46 @@ describe('lab addon service endpoints', () => {
         assert.equal(statusBody.exists, true);
         assert.equal(statusBody.sizeBytes > 0, true);
         assert.equal(statusBody.jsonlPath, body.outputPath);
+    });
+
+    it('does not persist /export/ingest records when persist=true but no target matches', async () => {
+        const runtimeRoot = await createTempRuntimeRoot();
+        const sink = new ExportFileSink({ runtimeRoot });
+
+        const { baseUrl } = await startTestServer(createApp({
+            exportIngestService: new ExportIngestService(stubExportConfig.targets, sink),
+            exportFileSink: sink
+        }));
+
+        const response = await fetch(`${baseUrl}/export/ingest`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                persist: true,
+                event: {
+                    observedAt: '2026-04-27T00:00:00.000Z',
+                    method: 'GET',
+                    url: 'https://unmatched.example.net/not-targeted',
+                    statusCode: 200,
+                    source: 'official-core-hook'
+                }
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.ok, true);
+        assert.equal(body.match.matched, false);
+        assert.equal(body.persisted, false);
+        assert.equal(body.outputPath, undefined);
+        assert.equal(body.skippedPersistenceReason, 'no-target-matched');
+        assert.equal(body.record.matchedTarget, undefined);
+
+        const statusResponse = await fetch(`${baseUrl}/export/output-status`);
+        assert.equal(statusResponse.status, 200);
+        const statusBody = await statusResponse.json();
+        assert.equal(statusBody.exists, false);
+        assert.equal(statusBody.sizeBytes, 0);
     });
 
 

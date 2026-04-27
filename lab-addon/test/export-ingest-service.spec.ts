@@ -48,6 +48,8 @@ describe('export ingest service', () => {
         assert.equal(record.body.encoding, 'utf8');
         assert.equal(typeof record.recordId, 'string');
         assert.equal(record.recordId.length, 16);
+        assert.equal(ingestResult.match.matched, true);
+        assert.equal(ingestResult.match.targetName, 'example-target');
         assert.equal(ingestResult.persisted, false);
     });
 
@@ -69,6 +71,7 @@ describe('export ingest service', () => {
         assert.equal(ingestResult.record.method, 'POST');
         assert.equal(ingestResult.record.contentType, 'application/octet-stream');
         assert.equal(ingestResult.record.body.encoding, 'base64');
+        assert.equal(ingestResult.match.matched, false);
     });
 
     it('export-file-sink appends JSONL records without overwriting existing lines', async () => {
@@ -144,10 +147,66 @@ describe('export ingest service', () => {
 
         assert.equal(ingestResult.persisted, true);
         assert.equal(typeof ingestResult.outputPath, 'string');
+        assert.equal(ingestResult.match.matched, true);
+        assert.equal(ingestResult.skippedPersistenceReason, undefined);
 
         const records = sink.readRecordsForTests();
         assert.equal(records.length, 1);
         assert.equal(records[0].url, 'https://example.com/api/books');
+    });
+
+    it('does not persist unmatched events when persist=true and returns skip reason', async () => {
+        const runtimeRoot = await createTempRuntimeRoot();
+        const sink = new ExportFileSink({ runtimeRoot });
+        const ingestService = new ExportIngestService([
+            {
+                name: 'example-target',
+                methods: ['GET'],
+                urlIncludes: ['example.com/api/books'],
+                statusCodes: [200]
+            }
+        ], sink);
+
+        const ingestResult = ingestService.ingest({
+            observedAt: '2026-04-27T00:00:00.000Z',
+            method: 'GET',
+            url: 'https://example.com/api/other',
+            statusCode: 200,
+            source: 'official-core-hook'
+        }, { persist: true });
+
+        assert.equal(ingestResult.match.matched, false);
+        assert.equal(ingestResult.persisted, false);
+        assert.equal(ingestResult.skippedPersistenceReason, 'no-target-matched');
+        assert.deepEqual(sink.readRecordsForTests(), []);
+    });
+
+    it('supports official-core-hook-shaped matched events persisting to JSONL', async () => {
+        const runtimeRoot = await createTempRuntimeRoot();
+        const sink = new ExportFileSink({ runtimeRoot });
+        const ingestService = new ExportIngestService([
+            {
+                name: 'core-hook-target',
+                methods: ['POST'],
+                urlIncludes: ['example.com/live'],
+                statusCodes: [201]
+            }
+        ], sink);
+
+        const ingestResult = ingestService.ingest({
+            observedAt: '2026-04-27T00:00:00.000Z',
+            method: 'post',
+            url: 'https://example.com/live',
+            statusCode: 201,
+            contentType: 'application/json',
+            bodyText: '{"ok":true}',
+            source: 'official-core-hook'
+        }, { persist: true });
+
+        assert.equal(ingestResult.match.matched, true);
+        assert.equal(ingestResult.persisted, true);
+        assert.equal(ingestResult.record.matchedTarget, 'core-hook-target');
+        assert.equal(sink.readRecordsForTests().length, 1);
     });
 
     it('does not persist when persist=false or omitted', async () => {
@@ -169,6 +228,8 @@ describe('export ingest service', () => {
 
         assert.equal(omittedResult.persisted, false);
         assert.equal(falseResult.persisted, false);
+        assert.equal(omittedResult.match.matched, false);
+        assert.equal(falseResult.match.matched, false);
 
         assert.deepEqual(sink.readRecordsForTests(), []);
     });
