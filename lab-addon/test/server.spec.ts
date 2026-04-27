@@ -165,7 +165,7 @@ describe('lab addon service endpoints', () => {
         assert.equal(Array.isArray(body.pendingRoutes), true);
         assert.equal(Array.isArray(body.capabilities), true);
         assert.deepEqual(body.summary, {
-            implemented: 16,
+            implemented: 17,
             safeStub: 3,
             pending: 0,
             requiresCoreHook: 1
