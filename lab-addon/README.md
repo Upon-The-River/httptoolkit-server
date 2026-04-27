@@ -314,10 +314,20 @@ Addon endpoints **must not** invoke those scripts in `-UseAddonServer` mode, bec
 
 ## Real environment validation
 
-Before any official core-hook proposal, run addon-only real-environment validation:
+Before any official core-hook proposal, run addon-only real-environment validation and generate a report artifact:
 
 - Runbook: [`docs/REAL_DEVICE_VALIDATION_RUNBOOK.md`](./docs/REAL_DEVICE_VALIDATION_RUNBOOK.md)
-- Smoke script: [`scripts/validate-lab-addon.ps1`](./scripts/validate-lab-addon.ps1)
+- Validation script: [`scripts/validate-lab-addon.ps1`](./scripts/validate-lab-addon.ps1)
+- Evidence template: [`../migration-notes/VALIDATION_EVIDENCE_TEMPLATE.md`](../migration-notes/VALIDATION_EVIDENCE_TEMPLATE.md)
+
+Recommended order:
+
+1. `npm run typecheck`
+2. `npm test`
+3. Start addon server (`npm run start`)
+4. Run `validate-lab-addon.ps1` with `-PersistExportTest`
+5. Review the generated report (`-ReportPath` + markdown/json output)
+6. Only then consider a minimal `/export/stream` core-hook proposal
 
 This validation path is safe by default:
 
@@ -327,22 +337,19 @@ This validation path is safe by default:
 - Headless start stays dry-run unless `-ExecuteHeadlessStart` is provided.
 - `/export/stream` is checked as a `requires-core-hook` stub only.
 
-Examples:
+Example report commands:
 
 ```powershell
-# Example 1
-.\scripts\validate-lab-addon.ps1 -SkipNpm
-
-# Example 2
-.\scripts\validate-lab-addon.ps1 -IncludeAndroid -DeviceId <device-id>
-
-# Example 3
 .\scripts\validate-lab-addon.ps1 `
-  -IncludeHeadless `
-  -HeadlessCommand node `
-  -HeadlessArgs "./bin/run","start" `
-  -HeadlessWorkingDir "C:\path\to\official"
+  -SkipNpm `
+  -PersistExportTest `
+  -OfficialRoot "C:\path\to\official" `
+  -ReportPath ".\runtime\validation\addon-smoke.md" `
+  -WriteMarkdownReport
 
-# Example 4
-.\scripts\validate-lab-addon.ps1 -PersistExportTest
+.\scripts\validate-lab-addon.ps1 `
+  -SkipNpm `
+  -PersistExportTest `
+  -ReportPath ".\runtime\validation\addon-smoke.json" `
+  -WriteJsonReport
 ```
