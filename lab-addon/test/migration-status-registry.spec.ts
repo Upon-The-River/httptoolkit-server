@@ -9,14 +9,13 @@ describe('migration status registry', () => {
 
         assert.equal(registry.capabilities.length, MIGRATION_CAPABILITIES.length);
         assert.deepEqual(registry.summary, {
-            implemented: 15,
-            safeStub: 4,
+            implemented: 16,
+            safeStub: 3,
             pending: 0,
             requiresCoreHook: 1
         });
 
         assert.deepEqual(registry.pendingRoutes, [
-            'POST /android/network/rescue',
             'POST /headless/start',
             'POST /headless/stop',
             'POST /headless/recover',
@@ -39,5 +38,10 @@ describe('migration status registry', () => {
         assert.ok(sessionStop);
         assert.equal(sessionStart.mutatesDeviceState, false);
         assert.equal(sessionStop.mutatesDeviceState, false);
+
+        const networkRescue = registry.capabilities.find((capability) => capability.path === '/android/network/rescue');
+        assert.ok(networkRescue);
+        assert.equal(networkRescue.status, 'implemented');
+        assert.equal(networkRescue.mutatesDeviceState, true);
     });
 });

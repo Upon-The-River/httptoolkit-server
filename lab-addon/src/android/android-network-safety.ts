@@ -1,14 +1,24 @@
 import { AdbExecutor, parseAndroidSetting, SystemAdbExecutor } from './adb-executor';
 import {
     AndroidNetworkCapabilities,
-    AndroidNetworkRescueStubResult,
+    AndroidNetworkRescueAction,
+    AndroidNetworkRescueOptions,
+    AndroidNetworkRescueReport,
     AndroidNetworkSafetyReport
 } from './android-network-types';
 
 export interface AndroidNetworkSafetyApi {
     inspectNetwork(options?: { deviceId?: string }): Promise<AndroidNetworkSafetyReport>;
-    rescueNetwork(): Promise<AndroidNetworkRescueStubResult>;
+    rescueNetwork(options?: AndroidNetworkRescueOptions): Promise<AndroidNetworkRescueReport>;
     getCapabilities(): AndroidNetworkCapabilities;
+}
+
+interface PlannedActionInput {
+    id: string;
+    description: string;
+    riskLevel: 'low' | 'medium' | 'high';
+    command?: string[];
+    skipReason?: string;
 }
 
 export class AndroidNetworkSafetyService implements AndroidNetworkSafetyApi {
@@ -76,11 +86,99 @@ export class AndroidNetworkSafetyService implements AndroidNetworkSafetyApi {
         };
     }
 
-    async rescueNetwork(): Promise<AndroidNetworkRescueStubResult> {
+    async rescueNetwork(options: AndroidNetworkRescueOptions = {}): Promise<AndroidNetworkRescueReport> {
+        const resolvedOptions = {
+            deviceId: options.deviceId,
+            dryRun: options.dryRun ?? true,
+            clearHttpProxy: options.clearHttpProxy ?? true,
+            clearPrivateDns: options.clearPrivateDns ?? false,
+            clearAlwaysOnVpn: options.clearAlwaysOnVpn ?? false,
+            includeAfterInspection: options.includeAfterInspection ?? true
+        };
+
+        const before = await this.inspectNetwork({ deviceId: resolvedOptions.deviceId });
+        const warnings = [
+            'Rescue is explicit and conservative: no reboot, no app uninstall, no VPN app disable.',
+            'High-risk actions are skipped unless a future explicit force option is implemented.'
+        ];
+
+        const planned = this.planActions(before, resolvedOptions);
+        const actions: AndroidNetworkRescueAction[] = [];
+
+        for (const candidate of planned) {
+            const commandText = candidate.command?.join(' ');
+            const forceSkipped = candidate.riskLevel === 'high'
+                ? 'High-risk actions are disabled in this rescue slice.'
+                : candidate.skipReason;
+
+            if (resolvedOptions.dryRun) {
+                actions.push({
+                    id: candidate.id,
+                    description: candidate.description,
+                    riskLevel: candidate.riskLevel,
+                    command: commandText,
+                    executed: false,
+                    skipped: true,
+                    reason: forceSkipped ?? 'dry-run'
+                });
+                continue;
+            }
+
+            if (forceSkipped) {
+                actions.push({
+                    id: candidate.id,
+                    description: candidate.description,
+                    riskLevel: candidate.riskLevel,
+                    command: commandText,
+                    executed: false,
+                    skipped: true,
+                    reason: forceSkipped
+                });
+                continue;
+            }
+
+            if (!candidate.command) {
+                actions.push({
+                    id: candidate.id,
+                    description: candidate.description,
+                    riskLevel: candidate.riskLevel,
+                    executed: false,
+                    skipped: true,
+                    reason: 'No executable command generated.'
+                });
+                continue;
+            }
+
+            const stdout = await this.safeShell(before.deviceId, candidate.command);
+            actions.push({
+                id: candidate.id,
+                description: candidate.description,
+                riskLevel: candidate.riskLevel,
+                command: commandText,
+                executed: true,
+                skipped: false,
+                stdout
+            });
+        }
+
+        const after = resolvedOptions.includeAfterInspection
+            ? await this.inspectNetwork({ deviceId: before.deviceId })
+            : undefined;
+
+        const skippedHighRisk = actions.some((action) => action.riskLevel === 'high' && action.skipped);
+        if (skippedHighRisk) {
+            warnings.push('At least one requested action was high-risk and intentionally skipped.');
+        }
+
         return {
-            ok: false,
-            implemented: false,
-            reason: 'rescue migration pending'
+            ok: true,
+            implemented: true,
+            deviceId: before.deviceId,
+            dryRun: resolvedOptions.dryRun,
+            actions,
+            warnings,
+            before,
+            after
         };
     }
 
@@ -91,11 +189,97 @@ export class AndroidNetworkSafetyService implements AndroidNetworkSafetyApi {
                 mutatesDeviceState: false
             },
             rescue: {
-                implemented: false,
-                mutatesDeviceState: false,
-                reason: 'rescue migration pending'
+                implemented: true,
+                mutatesDeviceState: true,
+                defaultDryRun: true,
+                limitations: [
+                    'no reboot',
+                    'no app uninstall',
+                    'no VPN app disable',
+                    'high-risk actions skipped'
+                ]
             }
         };
+    }
+
+    private planActions(before: AndroidNetworkSafetyReport, options: Required<AndroidNetworkRescueOptions>): PlannedActionInput[] {
+        const actions: PlannedActionInput[] = [];
+
+        if (options.clearHttpProxy) {
+            actions.push(
+                {
+                    id: 'clear-http-proxy-primary',
+                    description: 'Clear global HTTP proxy setting.',
+                    riskLevel: 'low',
+                    command: ['settings', 'delete', 'global', 'http_proxy']
+                },
+                {
+                    id: 'clear-http-proxy-host',
+                    description: 'Clear global HTTP proxy host setting.',
+                    riskLevel: 'low',
+                    command: ['settings', 'delete', 'global', 'global_http_proxy_host']
+                },
+                {
+                    id: 'clear-http-proxy-port',
+                    description: 'Clear global HTTP proxy port setting.',
+                    riskLevel: 'low',
+                    command: ['settings', 'delete', 'global', 'global_http_proxy_port']
+                },
+                {
+                    id: 'clear-http-proxy-exclusion-list',
+                    description: 'Clear global HTTP proxy exclusion list.',
+                    riskLevel: 'low',
+                    command: ['settings', 'delete', 'global', 'global_http_proxy_exclusion_list']
+                }
+            );
+        }
+
+        if (options.clearPrivateDns) {
+            actions.push(
+                {
+                    id: 'set-private-dns-opportunistic',
+                    description: 'Reset private DNS mode to opportunistic for conservative recovery.',
+                    riskLevel: 'medium',
+                    command: ['settings', 'put', 'global', 'private_dns_mode', 'opportunistic']
+                },
+                {
+                    id: 'clear-private-dns-specifier',
+                    description: 'Clear private DNS hostname specifier.',
+                    riskLevel: 'medium',
+                    command: ['settings', 'delete', 'global', 'private_dns_specifier']
+                }
+            );
+        }
+
+        if (options.clearAlwaysOnVpn) {
+            if (before.vpn.alwaysOnVpnApp || before.vpn.lockdownVpn === '1') {
+                actions.push({
+                    id: 'clear-always-on-vpn',
+                    description: 'Clear always-on VPN settings (requires explicit high-risk override, currently disabled).',
+                    riskLevel: 'high',
+                    command: ['settings', 'delete', 'secure', 'always_on_vpn_app'],
+                    skipReason: 'High-risk always-on VPN changes require a future explicit override option.'
+                });
+            } else {
+                actions.push({
+                    id: 'clear-always-on-vpn',
+                    description: 'No always-on VPN settings detected to clear.',
+                    riskLevel: 'high',
+                    skipReason: 'No clearly identified always-on VPN setting found.'
+                });
+            }
+        }
+
+        if (actions.length === 0) {
+            actions.push({
+                id: 'no-op',
+                description: 'No rescue actions were enabled.',
+                riskLevel: 'low',
+                skipReason: 'All rescue options were disabled.'
+            });
+        }
+
+        return actions;
     }
 
     private async resolveDeviceId(): Promise<string> {

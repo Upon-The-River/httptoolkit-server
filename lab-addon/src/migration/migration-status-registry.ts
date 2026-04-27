@@ -80,10 +80,10 @@ export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
         method: 'POST',
         path: '/android/network/rescue',
         domain: 'android-network',
-        status: 'safe-stub',
-        mutatesDeviceState: false,
-        description: 'Reserved rescue endpoint for Android network recovery.',
-        notes: 'Intentional safe no-op until recovery workflow migration is approved.'
+        status: 'implemented',
+        mutatesDeviceState: true,
+        description: 'Runs explicit conservative Android network rescue actions.',
+        notes: 'Defaults to dry-run and only executes explicitly enabled conservative low/medium risk actions.'
     },
     {
         id: 'android-network-capabilities',

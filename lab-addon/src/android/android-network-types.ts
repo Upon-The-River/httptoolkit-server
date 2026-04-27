@@ -31,10 +31,37 @@ export interface AndroidNetworkSafetyReport {
     warnings: string[];
 }
 
-export interface AndroidNetworkRescueStubResult {
-    ok: false;
-    implemented: false;
-    reason: 'rescue migration pending';
+export interface AndroidNetworkRescueOptions {
+    deviceId?: string;
+    dryRun?: boolean;
+    clearHttpProxy?: boolean;
+    clearPrivateDns?: boolean;
+    clearAlwaysOnVpn?: boolean;
+    includeAfterInspection?: boolean;
+}
+
+export type AndroidNetworkRescueRiskLevel = 'low' | 'medium' | 'high';
+
+export interface AndroidNetworkRescueAction {
+    id: string;
+    description: string;
+    riskLevel: AndroidNetworkRescueRiskLevel;
+    command?: string;
+    executed: boolean;
+    skipped: boolean;
+    reason?: string;
+    stdout?: string;
+}
+
+export interface AndroidNetworkRescueReport {
+    ok: boolean;
+    implemented: true;
+    deviceId?: string;
+    dryRun: boolean;
+    actions: AndroidNetworkRescueAction[];
+    warnings: string[];
+    before?: AndroidNetworkSafetyReport;
+    after?: AndroidNetworkSafetyReport;
 }
 
 export interface AndroidNetworkCapabilities {
@@ -43,8 +70,9 @@ export interface AndroidNetworkCapabilities {
         mutatesDeviceState: false;
     };
     rescue: {
-        implemented: false;
-        mutatesDeviceState: false;
-        reason: 'rescue migration pending';
+        implemented: true;
+        mutatesDeviceState: true;
+        defaultDryRun: true;
+        limitations: string[];
     };
 }
