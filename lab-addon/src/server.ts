@@ -11,6 +11,7 @@ import { buildMigrationStatusRegistry } from './migration/migration-status-regis
 import { getExportCapabilities } from './export/export-capabilities';
 import { matchExportEvent } from './export/export-event-matcher';
 import { ExportIngestService } from './export/export-ingest-service';
+import { ExportFileSink } from './export/export-file-sink';
 import { loadExportTargetsConfig } from './export/export-targets';
 import { SyntheticHttpEvent } from './export/export-types';
 import {
@@ -37,6 +38,7 @@ export interface CreateAppOptions {
     headlessControl?: HeadlessControlApi;
     headlessHealth?: HeadlessHealthService;
     exportIngestService?: ExportIngestService;
+    exportFileSink?: ExportFileSink;
     exportTargetsLoader?: typeof loadExportTargetsConfig;
 }
 
@@ -56,6 +58,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     const headlessHealth = options.headlessHealth ?? new HeadlessHealthService(headlessControl.getCapabilities());
     const exportTargetsLoader = options.exportTargetsLoader ?? loadExportTargetsConfig;
     let exportIngestService = options.exportIngestService;
+    let exportFileSink = options.exportFileSink;
 
     app.use(express.json({ limit: '5mb' }));
 
@@ -179,22 +182,36 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     app.post('/export/ingest', asyncHandler(async (req: Request, res: Response) => {
         const syntheticEvent = req.body?.event as SyntheticHttpEvent;
+        const persist = req.body?.persist === true;
+
         if (!syntheticEvent || typeof syntheticEvent.url !== 'string' || typeof syntheticEvent.method !== 'string' || typeof syntheticEvent.statusCode !== 'number') {
             res.status(400).json({
                 ok: false,
-                error: 'Expected JSON body: { "event": { "method": "GET", "url": "https://...", "statusCode": 200 } }'
+                error: 'Expected JSON body: { "event": { "method": "GET", "url": "https://...", "statusCode": 200 }, "persist": true? }'
             });
             return;
         }
 
-        if (!exportIngestService) {
-            const config = await exportTargetsLoader();
-            exportIngestService = new ExportIngestService(config.enabled ? config.targets : []);
+        if (persist && !exportFileSink) {
+            exportFileSink = new ExportFileSink();
         }
 
-        const normalizedRecord = exportIngestService.ingest(syntheticEvent);
-        res.json({ ok: true, record: normalizedRecord });
+        if (!exportIngestService || (persist && !exportIngestService.canPersist())) {
+            const config = await exportTargetsLoader();
+            exportIngestService = new ExportIngestService(config.enabled ? config.targets : [], exportFileSink);
+        }
+
+        const ingestResult = exportIngestService.ingest(syntheticEvent, { persist });
+        res.json({ ok: true, ...ingestResult });
     }));
+
+    app.get('/export/output-status', (_req: Request, res: Response) => {
+        if (!exportFileSink) {
+            exportFileSink = new ExportFileSink();
+        }
+
+        res.json(exportFileSink.getOutputStatus());
+    });
 
     app.get('/export/stream', (_req: Request, res: Response) => {
         res.status(501).json({

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { matchExportEvent } from './export-event-matcher';
 import { ExportMatchResult, ExportTargetRule, NormalizedExportRecord, SyntheticHttpEvent } from './export-types';
+import { ExportFileSink } from './export-file-sink';
 
 const getContentType = (headers: Record<string, string> | undefined): string => {
     const contentTypeHeader = Object.entries(headers ?? {})
@@ -17,15 +18,28 @@ const getStableRecordId = (event: SyntheticHttpEvent, observedAt: string): strin
         .slice(0, 16);
 };
 
+export interface ExportIngestResult {
+    record: NormalizedExportRecord;
+    persisted: boolean;
+    outputPath?: string;
+}
+
 export class ExportIngestService {
 
-    constructor(private readonly targets: ExportTargetRule[]) {}
+    constructor(
+        private readonly targets: ExportTargetRule[],
+        private readonly fileSink?: ExportFileSink
+    ) {}
 
     match(event: SyntheticHttpEvent): ExportMatchResult {
         return matchExportEvent(event, this.targets);
     }
 
-    ingest(event: SyntheticHttpEvent): NormalizedExportRecord {
+    canPersist(): boolean {
+        return Boolean(this.fileSink);
+    }
+
+    normalize(event: SyntheticHttpEvent): NormalizedExportRecord {
         const observedAt = event.timestamp ?? new Date().toISOString();
         const matchResult = this.match(event);
 
@@ -42,6 +56,24 @@ export class ExportIngestService {
                 encoding: event.responseBodyEncoding ?? 'utf8'
             },
             matchedTarget: matchResult.targetName
+        };
+    }
+
+    ingest(event: SyntheticHttpEvent, options: { persist?: boolean } = {}): ExportIngestResult {
+        const record = this.normalize(event);
+
+        if (options.persist && this.fileSink) {
+            const outputPath = this.fileSink.append(record);
+            return {
+                record,
+                persisted: true,
+                outputPath
+            };
+        }
+
+        return {
+            record,
+            persisted: false
         };
     }
 }
