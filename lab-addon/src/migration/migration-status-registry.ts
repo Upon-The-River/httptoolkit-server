@@ -7,7 +7,7 @@ import {
 
 const headlessConfig = loadHeadlessConfig();
 const headlessUsesLocalProcess = headlessConfig.backend === 'local-process';
-const headlessStartImplementedInRegistry = headlessUsesLocalProcess && Boolean(headlessConfig.startCommand);
+const headlessStartImplementedInRegistry = headlessUsesLocalProcess && Boolean(headlessConfig.startCommand) && headlessConfig.validationErrors.length === 0;
 
 export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
     {
@@ -120,7 +120,7 @@ export const MIGRATION_CAPABILITIES: MigrationCapability[] = [
         description: 'Placeholder for future headless startup orchestration.',
         notes: headlessStartImplementedInRegistry
             ? 'Implemented via optional local-process backend when explicitly configured.'
-            : 'Intentional safe no-op until full migration approval.'
+            : 'Intentional safe no-op unless local-process is explicitly configured. Runtime /headless/capabilities is the source of truth for env/request-body start availability.'
     },
     {
         id: 'headless-stop',

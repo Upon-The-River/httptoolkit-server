@@ -5,7 +5,7 @@ import {
     localProcessStrategy,
     safeStubStrategy
 } from '../src/headless/headless-backend-strategy';
-import { HeadlessConfig } from '../src/headless/headless-config';
+import { HeadlessConfig, loadHeadlessConfig } from '../src/headless/headless-config';
 import { HeadlessControlService } from '../src/headless/headless-control-service';
 import { NodeProcessRunner } from '../src/headless/headless-process-service';
 import { HeadlessProcessRegistry } from '../src/headless/headless-process-registry';
@@ -57,8 +57,45 @@ class SpawnOnlyRunner implements ProcessRunner {
 const localConfig: HeadlessConfig = {
     backend: 'local-process',
     startCommand: 'node',
-    startArgs: ['fake-headless.js']
+    startArgs: ['./bin/run', 'start'],
+    workingDir: '/tmp/official-server',
+    startEnv: { NODE_ENV: 'production' },
+    validationErrors: []
 };
+
+describe('headless config parsing', () => {
+    it('parses LAB_ADDON_HEADLESS_START_ARGS JSON array', () => {
+        const config = loadHeadlessConfig({
+            LAB_ADDON_HEADLESS_BACKEND: 'local-process',
+            LAB_ADDON_HEADLESS_START_COMMAND: 'node',
+            LAB_ADDON_HEADLESS_START_ARGS: '["./bin/run","start"]'
+        });
+
+        assert.deepEqual(config.startArgs, ['./bin/run', 'start']);
+        assert.equal(config.validationErrors.length, 0);
+    });
+
+    it('parses LAB_ADDON_HEADLESS_START_ARGS simple text conservatively', () => {
+        const config = loadHeadlessConfig({
+            LAB_ADDON_HEADLESS_BACKEND: 'local-process',
+            LAB_ADDON_HEADLESS_START_COMMAND: 'node',
+            LAB_ADDON_HEADLESS_START_ARGS: './bin/run start --flag "quoted value"'
+        });
+
+        assert.deepEqual(config.startArgs, ['./bin/run', 'start', '--flag', 'quoted value']);
+    });
+
+    it('invalid LAB_ADDON_HEADLESS_ENV_JSON is a validation error and does not crash import', () => {
+        const config = loadHeadlessConfig({
+            LAB_ADDON_HEADLESS_BACKEND: 'local-process',
+            LAB_ADDON_HEADLESS_START_COMMAND: 'node',
+            LAB_ADDON_HEADLESS_ENV_JSON: '{invalid'
+        });
+
+        assert.equal(config.validationErrors.length, 1);
+        assert.equal(config.validationErrors[0].includes('LAB_ADDON_HEADLESS_ENV_JSON'), true);
+    });
+});
 
 describe('headless backend strategies', () => {
     it('safeStubStrategy is the default non-mutating backend', () => {
@@ -138,22 +175,96 @@ describe('HeadlessControlService', () => {
         assert.equal(result.backend.kind, 'safe-stub');
     });
 
-    it('start with local-process config and fake runner records process', async () => {
+    it('start with request-body dryRun=true does not spawn and does not record process', async () => {
         const runner = new FakeProcessRunner({ ok: true, processId: 9876 });
         const registry = new HeadlessProcessRegistry();
-        const service = new HeadlessControlService({
-            config: localConfig,
-            processRunner: runner,
-            processRegistry: registry
+        const service = new HeadlessControlService({ config: localConfig, processRunner: runner, processRegistry: registry });
+
+        const result = await service.start({
+            backend: 'local-process',
+            command: 'node',
+            args: ['./bin/run', 'start'],
+            dryRun: true
         });
 
-        const result = await service.start();
+        assert.equal(result.ok, true);
+        assert.equal(result.implemented, true);
+        assert.equal(result.dryRun, true);
+        assert.equal(result.startPlan?.command, 'node');
+        assert.equal(runner.spawnCalls.length, 0);
+        assert.equal(registry.getLatest(), undefined);
+    });
+
+    it('start with request body dryRun=false uses fake runner and records process', async () => {
+        const runner = new FakeProcessRunner({ ok: true, processId: 9876 });
+        const registry = new HeadlessProcessRegistry();
+        const service = new HeadlessControlService({ config: localConfig, processRunner: runner, processRegistry: registry });
+
+        const result = await service.start({
+            backend: 'local-process',
+            command: 'node',
+            args: ['./bin/run', 'start'],
+            dryRun: false
+        });
+
         assert.equal(result.ok, true);
         assert.equal(result.implemented, true);
         assert.equal(result.backend.kind, 'local-process');
         assert.equal(result.process?.processId, 9876);
         assert.equal(registry.getLatest()?.processId, 9876);
         assert.equal(runner.spawnCalls.length, 1);
+    });
+
+    it('start with env local-process config uses fake runner', async () => {
+        const runner = new FakeProcessRunner({ ok: true, processId: 3333 });
+        const registry = new HeadlessProcessRegistry();
+        const service = new HeadlessControlService({ config: localConfig, processRunner: runner, processRegistry: registry });
+
+        const result = await service.start();
+
+        assert.equal(result.ok, true);
+        assert.equal(runner.spawnCalls.length, 1);
+        assert.equal(registry.getLatest()?.processId, 3333);
+    });
+
+    it('start with invalid config returns validation error', async () => {
+        const runner = new FakeProcessRunner();
+        const service = new HeadlessControlService({
+            processRunner: runner,
+            config: {
+                ...localConfig,
+                validationErrors: ['LAB_ADDON_HEADLESS_ENV_JSON contains invalid JSON.']
+            },
+            processRegistry: new HeadlessProcessRegistry()
+        });
+
+        const result = await service.start();
+        assert.equal(result.ok, false);
+        assert.equal(result.implemented, false);
+        assert.equal(result.validationErrors?.length, 1);
+        assert.equal(runner.spawnCalls.length, 0);
+    });
+
+    it('ProcessRunner receives cwd and env overrides', async () => {
+        const runner = new FakeProcessRunner({ ok: true, processId: 7777 });
+        const service = new HeadlessControlService({
+            config: localConfig,
+            processRunner: runner,
+            processRegistry: new HeadlessProcessRegistry()
+        });
+
+        await service.start({
+            backend: 'local-process',
+            command: 'node',
+            args: ['./bin/run', 'start'],
+            workingDir: 'C:/repo/official',
+            env: { NODE_ENV: 'production', CUSTOM_FLAG: '1' },
+            dryRun: false
+        });
+
+        assert.equal(runner.spawnCalls.length, 1);
+        assert.equal(runner.spawnCalls[0].cwd, 'C:/repo/official');
+        assert.deepEqual(runner.spawnCalls[0].env, { NODE_ENV: 'production', CUSTOM_FLAG: '1' });
     });
 
     it('stop with no registered addon process returns safe non-action', async () => {
@@ -226,6 +337,19 @@ describe('HeadlessControlService', () => {
         assert.equal(capabilities.recover.implemented, true);
     });
 
+    it('stop/recover remain conservative with NodeProcessRunner kill capability false', () => {
+        const service = new HeadlessControlService({
+            config: localConfig,
+            processRunner: new NodeProcessRunner(),
+            processRegistry: new HeadlessProcessRegistry()
+        });
+
+        const capabilities = service.getCapabilities();
+        assert.equal(capabilities.stop.implemented, false);
+        assert.equal(capabilities.recover.implemented, false);
+        assert.equal(capabilities.backend.canExecuteStart, true);
+    });
+
     it('stop does not call kill when runner capability reports kill as not implemented', async () => {
         const runner = new FakeProcessRunner(
             { ok: true, processId: 4444 },
@@ -281,6 +405,7 @@ describe('HeadlessControlService', () => {
         assert.equal(capabilities.backend.active, 'safe-stub');
         assert.equal(Array.isArray(capabilities.backend.strategies), true);
         assert.equal(capabilities.backend.strategies.some((strategy) => strategy.kind === 'local-process'), true);
+        assert.equal(capabilities.backend.canDryRunStart, true);
     });
 
     it('regression: no -UseAddonServer appears in any process runner call from HeadlessControlService', async () => {

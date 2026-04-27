@@ -27,7 +27,10 @@ export class NodeProcessRunner implements ProcessRunner {
                     stdio: 'ignore',
                     windowsHide: true,
                     cwd: request.cwd,
-                    env: request.env
+                    env: {
+                        ...process.env,
+                        ...(request.env ?? {})
+                    }
                 });
 
                 child.once('error', (error) => {

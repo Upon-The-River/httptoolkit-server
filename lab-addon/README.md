@@ -51,6 +51,16 @@ Headless control uses an explicit backend strategy model:
 
 Default behavior remains `safe-stub` unless explicitly configured.
 
+Local-process startup configuration environment variables:
+
+- `LAB_ADDON_HEADLESS_BACKEND` (`local-process` to opt in)
+- `LAB_ADDON_HEADLESS_START_COMMAND` (required for execute mode)
+- `LAB_ADDON_HEADLESS_START_ARGS` (JSON array string like `["./bin/run","start"]` or conservative plain string tokenization)
+- `LAB_ADDON_HEADLESS_WORKING_DIR` (optional start working directory)
+- `LAB_ADDON_HEADLESS_ENV_JSON` (optional JSON object of string values)
+
+Invalid JSON in `LAB_ADDON_HEADLESS_START_ARGS` or `LAB_ADDON_HEADLESS_ENV_JSON` does not crash module import; it appears as validation errors in `/headless/start` and `/headless/capabilities`.
+
 Important semantics:
 
 - Backend strategy availability (`local-process`) does **not** imply every action is implemented.
@@ -63,6 +73,8 @@ Safety guarantees:
 
 - The addon process registry tracks **only addon-started processes**.
 - The addon does **not** inspect, claim ownership of, or kill arbitrary external processes.
+- Start process tracking applies only to addon-started processes created by this addon start flow.
+- `stop`/`recover` do not kill arbitrary external processes; they remain conservative unless runner kill support is explicitly implemented.
 - Server internals do **not** call client scripts with `-UseAddonServer`.
 - `/headless/*` endpoints do not recursively invoke other `/headless/*` endpoints.
 
@@ -72,6 +84,10 @@ Safety guarantees:
   - Returns addon-side headless service health summary.
 - `POST /headless/start`
   - Default safe stub unless local-process backend + start command are configured.
+  - Request body overrides are supported (`backend`, `command`, `args`, `workingDir`, `env`, `dryRun`).
+  - Request-body mode defaults to `dryRun: true` unless `dryRun: false` is explicitly sent.
+  - `dryRun: true` returns a resolved start plan and does not spawn or register a process.
+  - Execute mode (`dryRun: false`) always spawns `command + args` directly (no shell command interpolation).
   - Can return `implemented: true` independently of stop/recover support.
 - `POST /headless/stop`
   - Safe explicit no-op by default.
@@ -211,11 +227,33 @@ Health:
 curl http://127.0.0.1:45457/headless/health
 ```
 
-Start (stub):
+Start (default safe-stub):
 
 ```powershell
 curl -Method POST -Uri http://127.0.0.1:45457/headless/start
 ```
+
+Start dry-run with request-body override (default dry-run behavior for body-based start):
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/headless/start `
+  -ContentType 'application/json' `
+  -Body '{"backend":"local-process","command":"node","args":["./bin/run","start"],"workingDir":"C:/path/to/httptoolkit-server-official","env":{"NODE_ENV":"production"}}'
+```
+
+Start execute mode (`dryRun:false`) with explicit command:
+
+```powershell
+curl -Method POST -Uri http://127.0.0.1:45457/headless/start `
+  -ContentType 'application/json' `
+  -Body '{"backend":"local-process","command":"node","args":["./bin/run","start"],"workingDir":"C:/path/to/httptoolkit-server-official","dryRun":false}'
+```
+
+Recommended official server start tuple:
+
+- `command`: `node`
+- `args`: `["./bin/run", "start"]`
+- `workingDir`: path to the official `httptoolkit-server` repository
 
 Stop:
 
