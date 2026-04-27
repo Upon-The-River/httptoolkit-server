@@ -336,7 +336,8 @@ This validation path is safe by default:
 - Headless checks are skipped unless `-IncludeHeadless` is provided.
 - Headless start stays dry-run unless `-ExecuteHeadlessStart` is provided.
 - `/session/start` is skipped unless `-IncludeSessionStart` is provided (it may require full official/mockttp session backend conditions).
-- `/export/stream` is checked as a `requires-core-hook` stub (HTTP `501` expected pre-core-hook).
+- `/export/stream` is checked as a `requires-core-hook` stub (HTTP `501` expected pre-core-hook and treated as PASS).
+- Validation accepts `501` when response fields/body indicate `requires-core-hook` or when `/migration/status` confirms `GET /export/stream` is `requires-core-hook`.
 
 Example report commands:
 

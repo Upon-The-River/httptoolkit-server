@@ -29,7 +29,7 @@ Goals:
 - `/headless/start` uses dry-run mode by default in validation.
 - `/headless/stop` and `/headless/recover` stay conservative (not executed by default in smoke validation).
 - `/session/start` is optional in default smoke validation (`-IncludeSessionStart` enables it as a required gate).
-- `/export/stream` is expected to remain `requires-core-hook` before core-hook work (commonly HTTP `501`).
+- `/export/stream` is expected to remain `requires-core-hook` before core-hook work (commonly HTTP `501`), and this counts as a validation PASS.
 - Do **not** run `clearPrivateDns` or `clearAlwaysOnVpn` unless explicitly understood and approved.
 - Validation scripts do **not** reboot devices, uninstall apps, disable VPN packages, or kill arbitrary external processes.
 - Failed `official-core-cleanliness` must block core-hook work.
@@ -92,7 +92,7 @@ curl http://127.0.0.1:45457/export/output-status
 curl http://127.0.0.1:45457/export/stream
 ```
 
-`/export/stream` is expected to return a structured `requires-core-hook` response/stub at this stage, most commonly via HTTP `501`.
+`/export/stream` is expected to return a structured `requires-core-hook` response/stub at this stage, most commonly via HTTP `501`. The validation script treats this as PASS when either the response indicates `requires-core-hook` or `/migration/status` confirms `GET /export/stream` is `requires-core-hook`.
 
 ## E. Expected Results
 
@@ -100,7 +100,7 @@ curl http://127.0.0.1:45457/export/stream
 - `POST /session/start` is optional by default and only required when `-IncludeSessionStart` is used.
 - `POST /export/ingest` succeeds.
 - If `-PersistExportTest` is used, `/export/output-status` confirms `exists=true` and `sizeBytes>0`.
-- `GET /export/stream` returns a `requires-core-hook`/stub response.
+- `GET /export/stream` returns a `requires-core-hook`/stub response (HTTP `501` is a normal expected pre-core-hook PASS).
 - Official core cleanliness is reviewed when `-OfficialRoot` is provided.
 - Report file is written and attached to migration evidence.
 

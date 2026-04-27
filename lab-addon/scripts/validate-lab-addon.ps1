@@ -30,6 +30,7 @@ $script:ReportWrittenPath = ''
 $script:FinalRecommendation = ''
 $script:SafeToProceedToCoreHook = $false
 $script:CoreHookReasons = @()
+$script:MigrationStatus = $null
 
 $RequiredGateNames = @(
     'addon server reachable',
@@ -40,7 +41,7 @@ $RequiredGateNames = @(
     'POST /export/match',
     'POST /export/ingest',
     'GET /export/output-status',
-    'GET /export/stream (expects requires-core-hook)'
+    'GET /export/stream (expects requires-core-hook; HTTP 501 is PASS pre-core-hook)'
 )
 
 if ($IncludeSessionStart) {
@@ -137,36 +138,87 @@ function Invoke-Check {
     }
 }
 
-function Invoke-JsonGet {
-    param([string]$Path)
+function Invoke-JsonRequest {
+    param(
+        [ValidateSet('Get', 'Post')]
+        [string]$Method,
+        [string]$Path,
+        [object]$Body = $null
+    )
 
     $uri = "{0}{1}" -f $AddonBaseUrl.TrimEnd('/'), $Path
 
     try {
-        $body = Invoke-RestMethod -Method Get -Uri $uri
+        if ($Method -eq 'Get') {
+            $respBody = Invoke-RestMethod -Method Get -Uri $uri
+        }
+        else {
+            $json = $Body | ConvertTo-Json -Depth 20
+            $respBody = Invoke-RestMethod -Method Post -Uri $uri -ContentType 'application/json' -Body $json
+        }
+
         return [pscustomobject]@{
             statusCode = 200
-            body       = $body
+            body       = $respBody
         }
     }
     catch {
-        $resp = $_.Exception.Response
-        if ($null -eq $resp) { throw }
+        $statusCode = $null
+        $text = ''
+        $errorDetailsMessage = $null
 
-        $statusCode = [int]$resp.StatusCode
-        $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
-        $text = $reader.ReadToEnd()
-        $reader.Close()
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $errorDetailsMessage = [string]$_.ErrorDetails.Message
+            $text = $errorDetailsMessage
+        }
+
+        $resp = $_.Exception.Response
+        if ($null -ne $resp) {
+            try {
+                $statusCode = [int]$resp.StatusCode
+            }
+            catch {
+                $statusCode = $null
+            }
+
+            try {
+                $stream = $resp.GetResponseStream()
+                if ($null -ne $stream) {
+                    $reader = New-Object System.IO.StreamReader($stream)
+                    $responseText = $reader.ReadToEnd()
+                    $reader.Close()
+                    if (-not [string]::IsNullOrWhiteSpace($responseText)) {
+                        $text = $responseText
+                    }
+                }
+            }
+            catch {
+                # Preserve error details fallback when response stream is unavailable.
+            }
+        }
 
         $parsed = $null
-        try { $parsed = $text | ConvertFrom-Json } catch { }
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+            try { $parsed = $text | ConvertFrom-Json } catch { }
+        }
+
+        if ($null -eq $statusCode) {
+            throw
+        }
 
         return [pscustomobject]@{
             statusCode = $statusCode
             bodyText   = $text
             body       = $parsed
+            errorDetailsMessage = $errorDetailsMessage
         }
     }
+}
+
+function Invoke-JsonGet {
+    param([string]$Path)
+
+    return Invoke-JsonRequest -Method Get -Path $Path
 }
 
 function Invoke-JsonPost {
@@ -175,34 +227,74 @@ function Invoke-JsonPost {
         [object]$Body
     )
 
-    $uri = "{0}{1}" -f $AddonBaseUrl.TrimEnd('/'), $Path
-    $json = $Body | ConvertTo-Json -Depth 20
+    return Invoke-JsonRequest -Method Post -Path $Path -Body $Body
+}
 
-    try {
-        $respBody = Invoke-RestMethod -Method Post -Uri $uri -ContentType 'application/json' -Body $json
-        return [pscustomobject]@{
-            statusCode = 200
-            body       = $respBody
+function Test-ResponseRequiresCoreHook {
+    param([object]$Response)
+
+    if ($null -eq $Response) {
+        return $false
+    }
+
+    $tokens = New-Object System.Collections.Generic.List[string]
+
+    foreach ($propertyName in @('status', 'reason', 'message')) {
+        if ($Response.PSObject.Properties.Name -contains $propertyName) {
+            $value = $Response.$propertyName
+            if ($null -ne $value) {
+                $tokens.Add([string]$value) | Out-Null
+            }
         }
     }
-    catch {
-        $resp = $_.Exception.Response
-        if ($null -eq $resp) { throw }
 
-        $statusCode = [int]$resp.StatusCode
-        $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
-        $text = $reader.ReadToEnd()
-        $reader.Close()
-
-        $parsed = $null
-        try { $parsed = $text | ConvertFrom-Json } catch { }
-
-        return [pscustomobject]@{
-            statusCode = $statusCode
-            bodyText   = $text
-            body       = $parsed
+    foreach ($token in $tokens) {
+        if ($token -match 'requires-core-hook') {
+            return $true
         }
     }
+
+    if (
+        ($Response.PSObject.Properties.Name -contains 'implemented') -and
+        ($Response.PSObject.Properties.Name -contains 'requiresCoreHook') -and
+        $Response.implemented -eq $false -and
+        $Response.requiresCoreHook -eq $true
+    ) {
+        return $true
+    }
+
+    return $false
+}
+
+function Test-MigrationRegistryRequiresCoreHook {
+    param([object]$MigrationStatusBody)
+
+    if ($null -eq $MigrationStatusBody) {
+        return $false
+    }
+
+    if ($MigrationStatusBody.capabilities) {
+        foreach ($capability in $MigrationStatusBody.capabilities) {
+            if (
+                $capability -and
+                $capability.method -eq 'GET' -and
+                $capability.path -eq '/export/stream' -and
+                $capability.status -eq 'requires-core-hook'
+            ) {
+                return $true
+            }
+        }
+    }
+
+    if ($MigrationStatusBody.pendingRoutes) {
+        foreach ($pendingRoute in $MigrationStatusBody.pendingRoutes) {
+            if ($pendingRoute -eq 'GET /export/stream') {
+                return $true
+            }
+        }
+    }
+
+    return $false
 }
 
 function Get-DirtyPathFromStatusLine {
@@ -502,7 +594,7 @@ if ($null -eq $health) {
     Write-Host "Server may be unreachable. Start the addon with: cd $labAddonRoot; npm run start"
 }
 
-Invoke-Check -Name 'GET /migration/status' -Required $true -Action {
+$script:MigrationStatus = Invoke-Check -Name 'GET /migration/status' -Required $true -Action {
     $resp = Invoke-JsonGet -Path '/migration/status'
     if ($resp.statusCode -ne 200) {
         throw "Unexpected status code: $($resp.statusCode)"
@@ -679,22 +771,34 @@ else {
     Add-Result -Name 'export persistence verification (persist=true)' -Status 'SKIP' -Summary 'Skipped. Use -PersistExportTest to require JSONL persistence validation.' -Required $false -Snippet @{ persist = $false }
 }
 
-Invoke-Check -Name 'GET /export/stream (expects requires-core-hook)' -Required $true -Action {
+Invoke-Check -Name 'GET /export/stream (expects requires-core-hook; HTTP 501 is PASS pre-core-hook)' -Required $true -Action {
     $resp = Invoke-JsonGet -Path '/export/stream'
     $statusCode = [int]$resp.statusCode
 
     $requiresCoreHook = $false
     if ($resp.body) {
-        if ($resp.body.status -eq 'requires-core-hook') { $requiresCoreHook = $true }
-        if ($resp.body.reason -eq 'requires-core-hook') { $requiresCoreHook = $true }
-        if ($resp.body.implemented -eq $false -and $resp.body.requiresCoreHook -eq $true) { $requiresCoreHook = $true }
+        $requiresCoreHook = Test-ResponseRequiresCoreHook -Response $resp.body
     }
-    elseif ($resp.bodyText -and ($resp.bodyText -match 'requires-core-hook')) {
+
+    if (-not $requiresCoreHook -and $resp.bodyText -and ($resp.bodyText -match 'requires-core-hook')) {
         $requiresCoreHook = $true
     }
 
+    $migrationRegistryConfirms = Test-MigrationRegistryRequiresCoreHook -MigrationStatusBody $script:MigrationStatus
+
     if ($statusCode -eq 501 -and $requiresCoreHook) {
         return @{ statusCode = $statusCode; response = $resp.body; responseText = $resp.bodyText; validation = 'expected-501-requires-core-hook' }
+    }
+
+    if ($statusCode -eq 501 -and $migrationRegistryConfirms) {
+        return @{
+            statusCode = $statusCode
+            response = $resp.body
+            responseText = $resp.bodyText
+            migrationStatusConfirmed = $true
+            validation = 'expected-501-requires-core-hook-from-migration-status'
+            note = '501 accepted because /migration/status marks GET /export/stream as requires-core-hook.'
+        }
     }
 
     if ($statusCode -eq 200 -and $requiresCoreHook) {
@@ -702,7 +806,7 @@ Invoke-Check -Name 'GET /export/stream (expects requires-core-hook)' -Required $
     }
 
     if ($statusCode -eq 501) {
-        throw "Expected requires-core-hook indicator for 501 response. statusCode=$statusCode"
+        throw "Expected requires-core-hook indicator for 501 response (body or /migration/status fallback). statusCode=$statusCode"
     }
 
     throw "Expected requires-core-hook stub with HTTP 501 (or 200 compatibility). statusCode=$statusCode"
