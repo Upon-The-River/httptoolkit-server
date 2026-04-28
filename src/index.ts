@@ -33,8 +33,31 @@ import {
 } from './interceptors/docker/docker-interception-services';
 import { clearWebExtensionConfig, updateWebExtensionConfig } from './webextension';
 import { HttpClient } from './client/http-client';
-import { LiveExportAddonBridge } from './export/live-export-addon-bridge';
+import {
+    LiveExportAddonBridge,
+    setupLiveExportHook,
+    LiveExportHookTarget
+} from './export/live-export-addon-bridge';
 import { startAndroidActivationBridgeServer } from './automation/android-activation-bridge-server';
+
+type SessionHttpPlugin = {
+    getMockServer: () => LiveExportHookTarget & { port: number }
+};
+
+const getSessionHttpMockServer = (
+    http: SessionHttpPlugin | undefined
+): (LiveExportHookTarget & { port: number }) | undefined => {
+    if (!http || typeof http.getMockServer !== 'function') return undefined;
+
+    const mockServer = http.getMockServer();
+    if (!mockServer || typeof mockServer.port !== 'number') return undefined;
+
+    return mockServer;
+};
+
+export const resolveSessionHttpProxyPort = (
+    payload: { http?: SessionHttpPlugin } | undefined
+): number | undefined => getSessionHttpMockServer(payload?.http)?.port;
 
 async function generateHTTPSConfig(configPath: string) {
     const keyPath = path.join(configPath, 'ca.key');
@@ -92,19 +115,26 @@ function manageBackgroundServices(
 ) {
     let activeSessions = 0;
 
-    standalone.on('mock-session-started', async ({ http, webrtc }, sessionId) => {
+    standalone.on('mock-session-started', async (sessionData, sessionId) => {
         activeSessions += 1;
         if (shutdownTimer) {
             clearTimeout(shutdownTimer);
             shutdownTimer = undefined;
         }
 
-        const httpProxyPort = http.getMockServer().port;
+        const httpMockServer = getSessionHttpMockServer(sessionData?.http as SessionHttpPlugin | undefined);
+        if (!httpMockServer) {
+            console.warn(`Mock session ${sessionId} started without a supported HTTP session; skipping session setup`);
+            return;
+        }
+
+        const httpProxyPort = httpMockServer.port;
+        const webrtcEnabled = !!sessionData?.webrtc;
 
         console.log(`Mock session started, http on port ${
             httpProxyPort
         }, webrtc ${
-            !!webrtc ? 'enabled' : 'disabled'
+            webrtcEnabled ? 'enabled' : 'disabled'
         }`);
 
         startDockerInterceptionServices(httpProxyPort, httpsConfig, ruleParameters)
@@ -112,20 +142,12 @@ function manageBackgroundServices(
             console.log("Could not start Docker components:", error);
         });
 
-        updateWebExtensionConfig(sessionId, httpProxyPort, !!webrtc)
+        updateWebExtensionConfig(sessionId, httpProxyPort, webrtcEnabled)
         .catch((error) => {
             console.log("Could not update WebRTC config:", error);
         });
 
-        if (liveExportAddonBridge.isEnabled()) {
-            void http.getMockServer().on('request', (request) => {
-                liveExportAddonBridge.trackRequest(request);
-            });
-
-            void http.getMockServer().on('response', (response) => {
-                liveExportAddonBridge.trackResponse(response);
-            });
-        }
+        setupLiveExportHook(liveExportAddonBridge, httpMockServer);
     });
 
     standalone.on('mock-session-stopping', ({ http }) => {

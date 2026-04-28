@@ -1,7 +1,11 @@
 import * as fs from 'fs';
 import { expect } from 'chai';
 
-import { LiveExportAddonBridge, LiveExportBridgeEvent } from '../../src/export/live-export-addon-bridge';
+import {
+    LiveExportAddonBridge,
+    LiveExportBridgeEvent,
+    setupLiveExportHook
+} from '../../src/export/live-export-addon-bridge';
 
 const createRequest = () => ({
     id: 'request-1',
@@ -82,6 +86,48 @@ describe('LiveExportAddonBridge', () => {
         }).not.to.throw();
 
         await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    it('does not register hook handlers when disabled', () => {
+        let onCalls = 0;
+        const hookTarget = {
+            on: () => {
+                onCalls += 1;
+            }
+        } as any;
+
+        const bridge = new LiveExportAddonBridge({
+            enabled: false,
+            baseUrl: 'http://127.0.0.1:45457',
+            persist: true,
+            timeoutMs: 1000
+        });
+
+        const hookRegistered = setupLiveExportHook(bridge, hookTarget);
+
+        expect(hookRegistered).to.equal(false);
+        expect(onCalls).to.equal(0);
+    });
+
+    it('swallows hook registration failures', () => {
+        const bridge = new LiveExportAddonBridge({
+            enabled: true,
+            baseUrl: 'http://127.0.0.1:45457',
+            persist: true,
+            timeoutMs: 1000
+        });
+
+        const failingHookTarget = {
+            on: () => {
+                throw new Error('hook-failure');
+            }
+        } as any;
+
+        let result: boolean | undefined;
+        expect(() => {
+            result = setupLiveExportHook(bridge, failingHookTarget);
+        }).not.to.throw();
+        expect(result).to.equal(false);
     });
 
     it('respects timeout via abort signal', async () => {

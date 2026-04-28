@@ -88,6 +88,11 @@ export type LiveExportBridgePoster = (
     options: LiveExportBridgePostOptions
 ) => Promise<void>;
 
+export interface LiveExportHookTarget {
+    on(event: 'request', callback: (request: CompletedRequest) => void): unknown;
+    on(event: 'response', callback: (response: CompletedResponse) => void): unknown;
+}
+
 const defaultPoster: LiveExportBridgePoster = async (url, body, options) => {
     const response = await fetch(url, {
         method: 'POST',
@@ -183,3 +188,29 @@ export class LiveExportAddonBridge {
         }
     }
 }
+
+export const setupLiveExportHook = (
+    liveExportAddonBridge: LiveExportAddonBridge,
+    mockServer: LiveExportHookTarget | undefined
+): boolean => {
+    if (!liveExportAddonBridge.isEnabled()) return false;
+    if (!mockServer) {
+        console.warn('Live export hook setup skipped: missing HTTP mock server');
+        return false;
+    }
+
+    try {
+        void mockServer.on('request', (request) => {
+            liveExportAddonBridge.trackRequest(request);
+        });
+
+        void mockServer.on('response', (response) => {
+            liveExportAddonBridge.trackResponse(response);
+        });
+
+        return true;
+    } catch (error: any) {
+        console.warn(`Live export hook setup failed: ${error?.message || error}`);
+        return false;
+    }
+};
