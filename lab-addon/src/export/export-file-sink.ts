@@ -43,9 +43,15 @@ export class ExportFileSink {
     }
 
     readRecordsForTests(): NormalizedExportRecord[] {
+        return this.readRecordsSinceOffsetForTests(0);
+    }
+
+    readRecordsSinceOffsetForTests(startOffsetBytes: number): NormalizedExportRecord[] {
         if (!fs.existsSync(this.paths.jsonlPath)) return [];
 
-        const content = fs.readFileSync(this.paths.jsonlPath, 'utf8');
+        const stats = fs.statSync(this.paths.jsonlPath);
+        const boundedStart = Math.max(0, Math.min(startOffsetBytes, stats.size));
+        const content = fs.readFileSync(this.paths.jsonlPath).subarray(boundedStart).toString('utf8');
         return content
             .split(/\r?\n/)
             .filter((line) => line.trim().length > 0)

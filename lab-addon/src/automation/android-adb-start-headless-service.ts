@@ -47,12 +47,17 @@ interface SessionManagerLike {
     getTargetTrafficSignal(options?: { waitMs?: number, pollIntervalMs?: number }): Promise<TargetTrafficSignal>;
 }
 
+const TRAFFIC_WAIT_TIMEOUT_MS = 10_000;
+const TRAFFIC_WAIT_POLL_MS = 500;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export interface AndroidAdbStartHeadlessServiceOptions {
     androidNetworkSafety: AndroidNetworkSafetyApi;
     sessionManager?: SessionManagerLike;
     activationClient: AndroidActivationClient;
     healthStore: AutomationHealthStore;
-    exportFileSink?: Pick<ExportFileSink, 'getOutputStatus' | 'readRecordsForTests'>;
+    exportFileSink?: Pick<ExportFileSink, 'getOutputStatus' | 'readRecordsForTests' | 'readRecordsSinceOffsetForTests'>;
     matchTargetTraffic?: (url: string) => boolean;
 }
 
@@ -61,7 +66,7 @@ export class AndroidAdbStartHeadlessService {
     private readonly sessionManager: SessionManagerLike;
     private readonly activationClient: AndroidActivationClient;
     private readonly healthStore: AutomationHealthStore;
-    private readonly exportFileSink: Pick<ExportFileSink, 'getOutputStatus' | 'readRecordsForTests'>;
+    private readonly exportFileSink: Pick<ExportFileSink, 'getOutputStatus' | 'readRecordsForTests' | 'readRecordsSinceOffsetForTests'>;
     private readonly matchTargetTraffic: (url: string) => boolean;
 
     constructor(options: AndroidAdbStartHeadlessServiceOptions) {
@@ -137,15 +142,33 @@ export class AndroidAdbStartHeadlessService {
             ? bridgeResponse.proxyPort
             : localSession?.proxyPort ?? requestedProxyPort;
 
-        const outputStatusAfter = this.exportFileSink.getOutputStatus();
-        const jsonlGrowthObserved = outputStatusAfter.sizeBytes > beforeOutputSize;
-        const qidianTrafficObserved = this.exportFileSink.readRecordsForTests()
-            .some((record) => typeof record.url === 'string' && this.matchTargetTraffic(record.url));
+        const shouldWaitForTraffic = input.waitForTraffic === true;
+        const shouldWaitForTargetTraffic = input.waitForTargetTraffic === true;
+        const shouldPollOutputWindow = shouldWaitForTraffic || shouldWaitForTargetTraffic;
 
-        const observedSignal = (input.waitForTraffic ?? true)
+        let jsonlGrowthObserved = false;
+        let qidianTrafficObserved = false;
+        const evaluateOutputWindow = () => {
+            const outputStatus = this.exportFileSink.getOutputStatus();
+            jsonlGrowthObserved = jsonlGrowthObserved || outputStatus.sizeBytes > beforeOutputSize;
+            const newRecords = this.exportFileSink.readRecordsSinceOffsetForTests(beforeOutputSize);
+            qidianTrafficObserved = qidianTrafficObserved || newRecords
+                .some((record) => typeof record.url === 'string' && this.matchTargetTraffic(record.url));
+        };
+
+        evaluateOutputWindow();
+        if (shouldPollOutputWindow && (!jsonlGrowthObserved || !qidianTrafficObserved)) {
+            const deadline = Date.now() + TRAFFIC_WAIT_TIMEOUT_MS;
+            while (Date.now() < deadline && (!jsonlGrowthObserved || !qidianTrafficObserved)) {
+                await sleep(TRAFFIC_WAIT_POLL_MS);
+                evaluateOutputWindow();
+            }
+        }
+
+        const observedSignal = shouldWaitForTraffic
             ? await this.sessionManager.getObservedTrafficSignal({ waitMs: 250, pollIntervalMs: 100 })
             : { observed: false } as ObservedTrafficSignal;
-        const targetSignal = (input.waitForTargetTraffic ?? true)
+        const targetSignal = shouldWaitForTargetTraffic
             ? await this.sessionManager.getTargetTrafficSignal({ waitMs: 250, pollIntervalMs: 100 })
             : { observed: false } as TargetTrafficSignal;
 
