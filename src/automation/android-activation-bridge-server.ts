@@ -1,6 +1,5 @@
 import * as http from 'http';
 import express from 'express';
-import { getRemote } from 'mockttp';
 
 import { ApiModel } from '../api/api-model';
 import { AndroidBootstrapResult, prepareAndroidBootstrapRules } from './android-bootstrap-rules';
@@ -10,11 +9,6 @@ const DEFAULT_BRIDGE_HOST = '127.0.0.1';
 const DEFAULT_BRIDGE_PORT = 45458;
 const TRUSTED_MOCKTTP_ORIGIN = 'https://app.httptoolkit.tech';
 const DEFAULT_PROXY_PORT = 8000;
-
-type ProxySession = {
-    session: Pick<ReturnType<typeof getRemote>, 'forGet' | 'forAnyRequest' | 'stop'>;
-    shouldStop: boolean;
-};
 
 const parseBridgePort = (rawPort: string | undefined): number => {
     const parsed = Number(rawPort);
@@ -55,24 +49,9 @@ const emptyBootstrapResult = (proxyPort: number): AndroidBootstrapResult => ({
     warnings: []
 });
 
-async function getProxySession(proxyPort: number): Promise<ProxySession> {
-    const session = getRemote({
-        adminServerUrl: 'http://127.0.0.1:45456',
-        client: {
-            headers: {
-                origin: TRUSTED_MOCKTTP_ORIGIN
-            }
-        }
-    });
-
-    await session.start(proxyPort);
-    return { session, shouldStop: true };
-}
-
 export async function startAndroidActivationBridgeServer(options: {
     apiModel: ApiModel,
-    prepareProxySession?: (requestedProxyPort: number) => Promise<AndroidProxySessionResult>,
-    getProxySession?: (proxyPort: number) => Promise<ProxySession>
+    prepareProxySession?: (requestedProxyPort: number) => Promise<AndroidProxySessionResult>
 }): Promise<http.Server | undefined> {
     if (!isBridgeEnabled(process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED)) return;
 
@@ -82,8 +61,6 @@ export async function startAndroidActivationBridgeServer(options: {
         adminBaseUrl: 'http://127.0.0.1:45456',
         origin: TRUSTED_MOCKTTP_ORIGIN
     }));
-
-    const getProxySessionForRules = options.getProxySession ?? getProxySession;
 
     const bridgePort = parseBridgePort(process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT);
 
@@ -144,7 +121,11 @@ export async function startAndroidActivationBridgeServer(options: {
 
         try {
             const proxySessionPreparation = await prepareProxySession(requestedProxyPort);
-            if (!proxySessionPreparation.success) {
+            if (!proxySessionPreparation.success || !proxySessionPreparation.session) {
+                const preparationErrors = proxySessionPreparation.success
+                    ? ['proxy-rule-session-unavailable']
+                    : proxySessionPreparation.errors;
+
                 res.status(500).send({
                     success: false,
                     deviceId,
@@ -164,77 +145,72 @@ export async function startAndroidActivationBridgeServer(options: {
                     },
                     warning: 'VPN/data-plane success must be verified separately.',
                     dataPlaneObserved: false,
-                    errors: proxySessionPreparation.errors
+                    errors: preparationErrors
                 });
                 return;
             }
 
-            let managedProxySession: ProxySession | undefined;
-            try {
-                managedProxySession = await getProxySessionForRules(proxySessionPreparation.proxyPort);
-
-                const bootstrapResult = await prepareAndroidBootstrapRules(
-                    options.apiModel,
-                    proxySessionPreparation.proxyPort,
-                    {
-                        session: managedProxySession.session,
-                        certificateContent: proxySessionPreparation.certificateContent
-                    }
-                );
-
-                if (!bootstrapResult.applied) {
-                    res.status(500).send({
-                        success: false,
-                        deviceId,
-                        proxyPort: proxySessionPreparation.proxyPort,
-                        proxySessionPrepared: true,
-                        proxySessionSource: proxySessionPreparation.source,
-                        configAvailable: proxySessionPreparation.configAvailable,
-                        certificateAvailable: proxySessionPreparation.certificateAvailable,
-                        bootstrapRulesApplied: false,
-                        bootstrapResult,
-                        controlPlaneSuccess: false,
-                        activationResult: {
-                            success: false,
-                            metadata: {
-                                bootstrapWarnings: bootstrapResult.warnings
-                            }
-                        },
-                        warning: 'VPN/data-plane success must be verified separately.',
-                        dataPlaneObserved: false,
-                        errors: ['android-bootstrap-rules-failed']
-                    });
-                    return;
+            const bootstrapResult = await prepareAndroidBootstrapRules(
+                options.apiModel,
+                proxySessionPreparation.proxyPort,
+                {
+                    session: proxySessionPreparation.session,
+                    certificateContent: proxySessionPreparation.certificateContent
                 }
+            );
 
-                const activationResult = await options.apiModel.activateInterceptor(
-                    'android-adb',
-                    proxySessionPreparation.proxyPort,
-                    { deviceId, enableSocks }
-                ) as { success: boolean, metadata?: unknown };
-
-                const controlPlaneSuccess = activationResult.success === true && bootstrapResult.applied;
-                res.send({
-                    success: controlPlaneSuccess,
+            if (!bootstrapResult.applied) {
+                res.status(500).send({
+                    success: false,
                     deviceId,
                     proxyPort: proxySessionPreparation.proxyPort,
                     proxySessionPrepared: true,
                     proxySessionSource: proxySessionPreparation.source,
                     configAvailable: proxySessionPreparation.configAvailable,
                     certificateAvailable: proxySessionPreparation.certificateAvailable,
-                    bootstrapRulesApplied: bootstrapResult.applied,
+                    bootstrapRulesApplied: false,
                     bootstrapResult,
-                    controlPlaneSuccess,
-                    activationResult,
+                    controlPlaneSuccess: false,
+                    activationResult: {
+                        success: false,
+                        metadata: {
+                            bootstrapWarnings: bootstrapResult.warnings
+                        }
+                    },
                     warning: 'VPN/data-plane success must be verified separately.',
                     dataPlaneObserved: false,
-                    errors
+                    errors: ['android-bootstrap-rules-failed']
                 });
-            } finally {
-                if (managedProxySession?.shouldStop) {
-                    await managedProxySession.session.stop().catch(() => undefined);
-                }
+                return;
             }
+
+            const activationResult = await options.apiModel.activateInterceptor(
+                'android-adb',
+                proxySessionPreparation.proxyPort,
+                { deviceId, enableSocks }
+            ) as { success: boolean, metadata?: unknown };
+
+            const controlPlaneSuccess = activationResult.success === true
+                && proxySessionPreparation.success
+                && proxySessionPreparation.certificateAvailable
+                && bootstrapResult.applied;
+
+            res.send({
+                success: controlPlaneSuccess,
+                deviceId,
+                proxyPort: proxySessionPreparation.proxyPort,
+                proxySessionPrepared: true,
+                proxySessionSource: proxySessionPreparation.source,
+                configAvailable: proxySessionPreparation.configAvailable,
+                certificateAvailable: proxySessionPreparation.certificateAvailable,
+                bootstrapRulesApplied: bootstrapResult.applied,
+                bootstrapResult,
+                controlPlaneSuccess,
+                activationResult,
+                warning: 'VPN/data-plane success must be verified separately.',
+                dataPlaneObserved: false,
+                errors
+            });
         } catch (error) {
             res.status(500).send({
                 success: false,

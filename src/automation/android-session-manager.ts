@@ -1,3 +1,5 @@
+import { getRemote, Mockttp } from 'mockttp';
+
 import { ApiModel } from '../api/api-model';
 
 const DEFAULT_ADMIN_BASE_URL = 'http://127.0.0.1:45456';
@@ -6,7 +8,6 @@ const DEFAULT_ORIGIN = 'https://app.httptoolkit.tech';
 export type AndroidProxySessionSource =
     | 'existing-config'
     | 'mockttp-admin-start'
-    | 'old-session-manager'
     | 'unavailable';
 
 export interface AndroidProxySessionResult {
@@ -16,6 +17,7 @@ export interface AndroidProxySessionResult {
     configAvailable: boolean;
     certificateAvailable: boolean;
     certificateContent?: string;
+    session?: Pick<Mockttp, 'forGet' | 'forAnyRequest'>;
     errors: string[];
     warnings: string[];
 }
@@ -26,27 +28,16 @@ export async function prepareAndroidProxySession(options: {
     adminBaseUrl?: string;
     origin?: string;
     fetchImpl?: typeof fetch;
+    createRemoteSession?: (proxyPort: number, mode: 'start' | 'existing') => Promise<Pick<Mockttp, 'forGet' | 'forAnyRequest'> | undefined>;
 }): Promise<AndroidProxySessionResult> {
     const adminBaseUrl = options.adminBaseUrl ?? DEFAULT_ADMIN_BASE_URL;
     const origin = options.origin ?? DEFAULT_ORIGIN;
     const fetchImpl = options.fetchImpl ?? fetch;
+    const createRemoteSession = options.createRemoteSession ?? createDefaultRemoteSession(adminBaseUrl, origin);
 
     try {
         const initialConfig = await options.apiModel.getConfig(options.proxyPort);
         const initialCertificate = readCertificateContent(initialConfig);
-
-        if (initialConfig && initialCertificate) {
-            return {
-                success: true,
-                proxyPort: options.proxyPort,
-                source: 'existing-config',
-                configAvailable: true,
-                certificateAvailable: true,
-                certificateContent: initialCertificate,
-                errors: [],
-                warnings: []
-            };
-        }
 
         if (initialConfig && !initialCertificate) {
             return {
@@ -56,6 +47,34 @@ export async function prepareAndroidProxySession(options: {
                 configAvailable: true,
                 certificateAvailable: false,
                 errors: ['proxy-certificate-unavailable'],
+                warnings: []
+            };
+        }
+
+        if (initialConfig && initialCertificate) {
+            const session = await createRemoteSession(options.proxyPort, 'existing');
+            if (!session) {
+                return {
+                    success: false,
+                    proxyPort: options.proxyPort,
+                    source: 'existing-config',
+                    configAvailable: true,
+                    certificateAvailable: true,
+                    certificateContent: initialCertificate,
+                    errors: ['existing-config-without-rule-session-handle'],
+                    warnings: []
+                };
+            }
+
+            return {
+                success: true,
+                proxyPort: options.proxyPort,
+                source: 'existing-config',
+                configAvailable: true,
+                certificateAvailable: true,
+                certificateContent: initialCertificate,
+                session,
+                errors: [],
                 warnings: []
             };
         }
@@ -85,16 +104,53 @@ export async function prepareAndroidProxySession(options: {
         const startedConfig = await options.apiModel.getConfig(options.proxyPort);
         const startedCertificate = readCertificateContent(startedConfig);
 
+        if (!startedConfig) {
+            return {
+                success: false,
+                proxyPort: options.proxyPort,
+                source: 'unavailable',
+                configAvailable: false,
+                certificateAvailable: false,
+                errors: ['proxy-config-unavailable'],
+                warnings: []
+            };
+        }
+
+        if (!startedCertificate) {
+            return {
+                success: false,
+                proxyPort: options.proxyPort,
+                source: 'mockttp-admin-start',
+                configAvailable: true,
+                certificateAvailable: false,
+                errors: ['proxy-certificate-unavailable'],
+                warnings: []
+            };
+        }
+
+        const session = await createRemoteSession(options.proxyPort, 'start');
+        if (!session) {
+            return {
+                success: false,
+                proxyPort: options.proxyPort,
+                source: 'mockttp-admin-start',
+                configAvailable: true,
+                certificateAvailable: true,
+                certificateContent: startedCertificate,
+                errors: ['proxy-rule-session-unavailable'],
+                warnings: []
+            };
+        }
+
         return {
-            success: !!(startedConfig && startedCertificate),
+            success: true,
             proxyPort: options.proxyPort,
-            source: startedConfig ? 'mockttp-admin-start' : 'unavailable',
-            configAvailable: !!startedConfig,
-            certificateAvailable: !!startedCertificate,
+            source: 'mockttp-admin-start',
+            configAvailable: true,
+            certificateAvailable: true,
             certificateContent: startedCertificate,
-            errors: startedConfig
-                ? (startedCertificate ? [] : ['proxy-certificate-unavailable'])
-                : ['proxy-config-unavailable'],
+            session,
+            errors: [],
             warnings: []
         };
     } catch (error) {
@@ -109,6 +165,24 @@ export async function prepareAndroidProxySession(options: {
         };
     }
 }
+
+const createDefaultRemoteSession = (adminBaseUrl: string, origin: string) => {
+    return async (proxyPort: number, mode: 'start' | 'existing') => {
+        if (mode !== 'start') return undefined;
+
+        const session = getRemote({
+            adminServerUrl: adminBaseUrl,
+            client: {
+                headers: {
+                    origin
+                }
+            }
+        });
+
+        await session.start(proxyPort);
+        return session;
+    };
+};
 
 function readCertificateContent(config: unknown): string | undefined {
     if (!config || typeof config !== 'object') return;

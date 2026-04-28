@@ -107,13 +107,7 @@ describe('Android activation bridge server', () => {
                 configAvailable: true,
                 certificateAvailable: true,
                 certificateContent: 'mock-cert-content',
-                errors: [],
-                warnings: []
-            }),
-            getProxySession: async () => ({
-                shouldStop: false,
                 session: {
-                    stop: async () => undefined,
                     forGet: (url: string) => ({
                         thenJson: async () => {
                             callOrder.push(`rule-json:${url}`);
@@ -127,7 +121,9 @@ describe('Android activation bridge server', () => {
                             callOrder.push('rule-pass-through');
                         }
                     })
-                } as any
+                } as any,
+                errors: [],
+                warnings: []
             })
         });
 
@@ -229,13 +225,7 @@ describe('Android activation bridge server', () => {
                 configAvailable: true,
                 certificateAvailable: true,
                 certificateContent: 'cert-data',
-                errors: [],
-                warnings: []
-            }),
-            getProxySession: async () => ({
-                shouldStop: false,
                 session: {
-                    stop: async () => undefined,
                     forGet: () => ({
                         thenJson: async () => {
                             throw new Error('forced-bootstrap-rules-failure');
@@ -245,7 +235,9 @@ describe('Android activation bridge server', () => {
                     forAnyRequest: () => ({
                         thenPassThrough: async () => undefined
                     })
-                } as any
+                } as any,
+                errors: [],
+                warnings: []
             })
         });
 
@@ -264,6 +256,100 @@ describe('Android activation bridge server', () => {
             expect(body.controlPlaneSuccess).to.equal(false);
             expect(body.bootstrapRulesApplied).to.equal(false);
             expect(body.errors).to.deep.equal(['activation-bridge-internal-error']);
+            expect(activationCalled).to.equal(false);
+        } finally {
+            await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
+        }
+    });
+
+
+    it('does not stop proxy session after successful start-headless', async () => {
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
+
+        let stopCalled = false;
+        const bridge = await startAndroidActivationBridgeServer({
+            apiModel: {
+                getInterceptorMetadata: async () => ({ deviceIds: ['device-1'] }),
+                activateInterceptor: async () => ({ success: true, metadata: {} })
+            } as any,
+            prepareProxySession: async () => ({
+                success: true,
+                proxyPort: 9000,
+                source: 'mockttp-admin-start',
+                configAvailable: true,
+                certificateAvailable: true,
+                certificateContent: 'cert-data',
+                session: {
+                    stop: async () => {
+                        stopCalled = true;
+                    },
+                    forGet: () => ({
+                        thenJson: async () => undefined,
+                        thenReply: async () => undefined
+                    }),
+                    forAnyRequest: () => ({
+                        thenPassThrough: async () => undefined
+                    })
+                } as any,
+                errors: [],
+                warnings: []
+            })
+        });
+
+        const port = ((bridge!.address() as any).port);
+
+        try {
+            const response = await fetch(`http://127.0.0.1:${port}/automation/android-adb/start-headless`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ deviceId: 'device-1', proxyPort: 9000 })
+            });
+
+            expect(response.status).to.equal(200);
+            expect(stopCalled).to.equal(false);
+        } finally {
+            await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
+        }
+    });
+
+    it('does not activate interceptor when no usable rule session exists', async () => {
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
+
+        let activationCalled = false;
+        const bridge = await startAndroidActivationBridgeServer({
+            apiModel: {
+                getInterceptorMetadata: async () => ({ deviceIds: ['device-1'] }),
+                activateInterceptor: async () => {
+                    activationCalled = true;
+                    return { success: true, metadata: {} };
+                }
+            } as any,
+            prepareProxySession: async () => ({
+                success: true,
+                proxyPort: 9000,
+                source: 'existing-config',
+                configAvailable: true,
+                certificateAvailable: true,
+                certificateContent: 'cert-data',
+                errors: [],
+                warnings: []
+            })
+        });
+
+        const port = ((bridge!.address() as any).port);
+
+        try {
+            const response = await fetch(`http://127.0.0.1:${port}/automation/android-adb/start-headless`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ deviceId: 'device-1', proxyPort: 9000 })
+            });
+            const body = await response.json();
+
+            expect(response.status).to.equal(500);
+            expect(body.errors).to.deep.equal(['proxy-rule-session-unavailable']);
             expect(activationCalled).to.equal(false);
         } finally {
             await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
