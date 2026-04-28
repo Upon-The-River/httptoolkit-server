@@ -55,22 +55,27 @@ const makeService = (options: {
     activationClient: AndroidActivationClient,
     sessionManager?: any,
     outputSizes?: number[],
-    urls?: string[]
+    urls?: string[],
+    newUrlsTimeline?: string[][]
 }) => {
     const outputSizes = options.outputSizes ?? [0, 0];
     let statusCalls = 0;
+    const newUrlsTimeline = options.newUrlsTimeline ?? [options.urls ?? []];
+    let readCalls = 0;
+    const buildRecords = (urls: string[]) => urls.map((url, index) => ({
+        schemaVersion: 1,
+        recordId: String(index),
+        observedAt: new Date().toISOString(),
+        method: 'GET',
+        url,
+        statusCode: 200,
+        contentType: 'application/json',
+        body: { inline: '', encoding: 'utf8' as const }
+    }));
     const fileSink = {
         getOutputStatus: () => ({ exists: true, sizeBytes: outputSizes[Math.min(statusCalls++, outputSizes.length - 1)], exportDir: '', targetConfigPath: '', jsonlPath: '' }),
-        readRecordsForTests: () => (options.urls ?? []).map((url, index) => ({
-            schemaVersion: 1,
-            recordId: String(index),
-            observedAt: new Date().toISOString(),
-            method: 'GET',
-            url,
-            statusCode: 200,
-            contentType: 'application/json',
-            body: { inline: '', encoding: 'utf8' as const }
-        }))
+        readRecordsForTests: () => buildRecords(options.urls ?? []),
+        readRecordsSinceOffsetForTests: () => buildRecords(newUrlsTimeline[Math.min(readCalls++, newUrlsTimeline.length - 1)])
     };
 
     return new AndroidAdbStartHeadlessService({
@@ -251,5 +256,84 @@ describe('AndroidAdbStartHeadlessService', () => {
         const result = await service.startHeadless({ deviceId: undefined });
         assert.equal(result.success, false);
         assert.equal((result.errors?.[0] as any)?.code, 'missing-device-id');
+    });
+
+    it('does not treat stale qidian records as target traffic for current start', async () => {
+        const service = makeService({
+            activationClient: {
+                activateDeviceCapture: async () => ({
+                    success: true,
+                    details: { bridgeResponse: { success: true, controlPlaneSuccess: true, proxyPort: 8000 } }
+                }),
+                stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+                recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+            },
+            outputSizes: [100, 100],
+            urls: ['https://druidv6.if.qidian.com/argus/api/v3/bookdetail/get'],
+            newUrlsTimeline: [[]]
+        });
+
+        const result = await service.startHeadless({ deviceId: 'device-1', waitForTraffic: false, waitForTargetTraffic: true });
+        assert.equal(result.targetTrafficObserved, false);
+        assert.equal(result.trafficValidated, false);
+    });
+
+    it('marks target traffic observed when new qidian record appears after baseline', async () => {
+        const service = makeService({
+            activationClient: {
+                activateDeviceCapture: async () => ({
+                    success: true,
+                    details: { bridgeResponse: { success: true, controlPlaneSuccess: true, proxyPort: 8000 } }
+                }),
+                stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+                recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+            },
+            outputSizes: [100, 120],
+            newUrlsTimeline: [['https://druidv6.if.qidian.com/argus/api/v3/bookdetail/get']]
+        });
+
+        const result = await service.startHeadless({ deviceId: 'device-1', waitForTraffic: false, waitForTargetTraffic: true });
+        assert.equal(result.targetTrafficObserved, true);
+        assert.equal(result.trafficValidated, true);
+    });
+
+    it('marks data-plane observed when jsonl grows after polling delay', async () => {
+        const service = makeService({
+            activationClient: {
+                activateDeviceCapture: async () => ({
+                    success: true,
+                    details: { bridgeResponse: { success: true, controlPlaneSuccess: true, proxyPort: 8000 } }
+                }),
+                stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+                recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+            },
+            outputSizes: [100, 100, 140, 140],
+            newUrlsTimeline: [[], []]
+        });
+
+        const result = await service.startHeadless({ deviceId: 'device-1', waitForTraffic: true, waitForTargetTraffic: false });
+        assert.equal(result.dataPlaneObserved, true);
+        assert.equal(result.trafficValidated, true);
+    });
+
+    it('keeps traffic unvalidated when no new jsonl growth and no target traffic in wait window', async () => {
+        const service = makeService({
+            activationClient: {
+                activateDeviceCapture: async () => ({
+                    success: true,
+                    details: { bridgeResponse: { success: true, controlPlaneSuccess: true, proxyPort: 8000 } }
+                }),
+                stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+                recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+            },
+            outputSizes: [100, 100],
+            newUrlsTimeline: [[]]
+        });
+
+        const result = await service.startHeadless({ deviceId: 'device-1', waitForTraffic: true, waitForTargetTraffic: true });
+        assert.equal(result.dataPlaneObserved, false);
+        assert.equal(result.targetTrafficObserved, false);
+        assert.equal(result.trafficValidated, false);
+        assert.equal(result.success, false);
     });
 });
