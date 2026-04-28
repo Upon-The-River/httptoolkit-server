@@ -106,6 +106,8 @@ describe('Android activation bridge server', () => {
                 source: 'existing-config',
                 configAvailable: true,
                 certificateAvailable: true,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: true,
                 certificateContent: 'mock-cert-content',
                 session: {
                     forGet: (url: string) => ({
@@ -145,6 +147,8 @@ describe('Android activation bridge server', () => {
             expect(body.success).to.equal(true);
             expect(body.proxySessionPrepared).to.equal(true);
             expect(body.proxySessionSource).to.equal('existing-config');
+            expect(body.staleExistingConfig).to.equal(false);
+            expect(body.ruleSessionHandleAvailable).to.equal(true);
             expect(body.controlPlaneSuccess).to.equal(true);
             expect(body.bootstrapRulesApplied).to.equal(true);
             expect(body.warning).to.equal('VPN/data-plane success must be verified separately.');
@@ -179,6 +183,8 @@ describe('Android activation bridge server', () => {
                 source: 'mockttp-remote-start',
                 configAvailable: false,
                 certificateAvailable: false,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: false,
                 errors: ['proxy-config-unavailable'],
                 warnings: []
             })
@@ -205,6 +211,52 @@ describe('Android activation bridge server', () => {
         }
     });
 
+    it('does not activate interceptor when stale existing-config recovery fails', async () => {
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
+
+        let activationCalled = false;
+        const bridge = await startAndroidActivationBridgeServer({
+            apiModel: {
+                getInterceptorMetadata: async () => ({ deviceIds: ['device-1'] }),
+                activateInterceptor: async () => {
+                    activationCalled = true;
+                    return { success: true, metadata: {} };
+                }
+            } as any,
+            prepareProxySession: async () => ({
+                success: false,
+                proxyPort: 8000,
+                source: 'unavailable',
+                configAvailable: true,
+                certificateAvailable: true,
+                staleExistingConfig: true,
+                ruleSessionHandleAvailable: false,
+                errors: ['stale-existing-config-without-proxy-session'],
+                warnings: ['existing-config-without-rule-session-handle']
+            })
+        });
+
+        const port = ((bridge!.address() as any).port);
+
+        try {
+            const response = await fetch(`http://127.0.0.1:${port}/automation/android-adb/start-headless`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ deviceId: 'device-1', proxyPort: 8000 })
+            });
+            const body = await response.json();
+
+            expect(response.status).to.equal(500);
+            expect(body.errors).to.deep.equal(['stale-existing-config-without-proxy-session']);
+            expect(body.staleExistingConfig).to.equal(true);
+            expect(body.ruleSessionHandleAvailable).to.equal(false);
+            expect(activationCalled).to.equal(false);
+        } finally {
+            await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
+        }
+    });
+
     it('returns structured failure if bootstrap setup fails', async () => {
         process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
         process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
@@ -224,6 +276,8 @@ describe('Android activation bridge server', () => {
                 source: 'existing-config',
                 configAvailable: true,
                 certificateAvailable: true,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: true,
                 certificateContent: 'cert-data',
                 session: {
                     forGet: () => ({
@@ -279,6 +333,8 @@ describe('Android activation bridge server', () => {
                 source: 'mockttp-remote-start',
                 configAvailable: true,
                 certificateAvailable: true,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: true,
                 certificateContent: 'cert-data',
                 session: {
                     stop: async () => {
@@ -332,6 +388,8 @@ describe('Android activation bridge server', () => {
                 source: 'existing-config',
                 configAvailable: true,
                 certificateAvailable: true,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: false,
                 certificateContent: 'cert-data',
                 errors: [],
                 warnings: []
@@ -351,6 +409,73 @@ describe('Android activation bridge server', () => {
             expect(response.status).to.equal(500);
             expect(body.errors).to.deep.equal(['proxy-rule-session-unavailable']);
             expect(activationCalled).to.equal(false);
+        } finally {
+            await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
+        }
+    });
+
+    it('applies bootstrap to recovered stale-existing-config session before activation', async () => {
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
+
+        const callOrder: string[] = [];
+        const bridge = await startAndroidActivationBridgeServer({
+            apiModel: {
+                getInterceptorMetadata: async () => ({ deviceIds: ['device-1'] }),
+                activateInterceptor: async () => {
+                    callOrder.push('activate-interceptor');
+                    return { success: true, metadata: { activated: true } };
+                }
+            } as any,
+            prepareProxySession: async () => ({
+                success: true,
+                proxyPort: 9000,
+                source: 'stale-existing-config-recovered-by-remote-start',
+                configAvailable: true,
+                certificateAvailable: true,
+                staleExistingConfig: true,
+                ruleSessionHandleAvailable: true,
+                certificateContent: 'recovered-cert',
+                session: {
+                    forGet: (url: string) => ({
+                        thenJson: async () => {
+                            callOrder.push(`rule-json:${url}`);
+                        },
+                        thenReply: async () => {
+                            callOrder.push(`rule-reply:${url}`);
+                        }
+                    }),
+                    forAnyRequest: () => ({
+                        thenPassThrough: async () => {
+                            callOrder.push('rule-pass-through');
+                        }
+                    })
+                } as any,
+                errors: [],
+                warnings: []
+            })
+        });
+
+        const port = ((bridge!.address() as any).port);
+
+        try {
+            const response = await fetch(`http://127.0.0.1:${port}/automation/android-adb/start-headless`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ deviceId: 'device-1', proxyPort: 9000 })
+            });
+            const body = await response.json();
+
+            expect(response.status).to.equal(200);
+            expect(body.proxySessionSource).to.equal('stale-existing-config-recovered-by-remote-start');
+            expect(body.staleExistingConfig).to.equal(true);
+            expect(body.ruleSessionHandleAvailable).to.equal(true);
+            expect(callOrder).to.deep.equal([
+                'rule-json:http://android.httptoolkit.tech/config',
+                'rule-reply:http://amiusing.httptoolkit.tech/certificate',
+                'rule-pass-through',
+                'activate-interceptor'
+            ]);
         } finally {
             await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
         }

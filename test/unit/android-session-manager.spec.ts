@@ -29,6 +29,8 @@ describe('prepareAndroidProxySession', () => {
 
         expect(result.success).to.equal(true);
         expect(result.source).to.equal('existing-config');
+        expect(result.staleExistingConfig).to.equal(false);
+        expect(result.ruleSessionHandleAvailable).to.equal(true);
         expect(result.certificateAvailable).to.equal(true);
         expect(result.certificateContent).to.equal('cert-data');
         expect(result.session).to.equal(sharedSession);
@@ -36,18 +38,109 @@ describe('prepareAndroidProxySession', () => {
         expect(modes).to.deep.equal(['existing']);
     });
 
-    it('returns structured failure for existing config without a safe rule session handle', async () => {
+    it('recovers stale existing config by starting exactly once and re-reading config', async () => {
+        const modes: string[] = [];
+        let getConfigCalls = 0;
+        const recoveredSession = {
+            forGet: () => ({ thenJson: async () => undefined, thenReply: async () => undefined }),
+            forAnyRequest: () => ({ thenPassThrough: async () => undefined })
+        } as any;
+
+        const result = await prepareAndroidProxySession({
+            apiModel: {
+                getConfig: async () => {
+                    getConfigCalls += 1;
+                    return getConfigCalls === 1
+                        ? { certificateContent: 'stale-cert-data' }
+                        : { certificateContent: 'fresh-cert-data' };
+                }
+            } as any,
+            proxyPort: 8000,
+            createRemoteSession: async (_proxyPort, mode) => {
+                modes.push(mode);
+                return mode === 'start' ? recoveredSession : undefined;
+            }
+        });
+
+        expect(result.success).to.equal(true);
+        expect(result.source).to.equal('stale-existing-config-recovered-by-remote-start');
+        expect(result.staleExistingConfig).to.equal(true);
+        expect(result.ruleSessionHandleAvailable).to.equal(true);
+        expect(result.certificateContent).to.equal('fresh-cert-data');
+        expect(result.warnings).to.deep.equal(['existing-config-without-rule-session-handle']);
+        expect(getConfigCalls).to.equal(2);
+        expect(modes).to.deep.equal(['existing', 'start']);
+    });
+
+    it('fails stale existing config recovery when fresh session cannot be started', async () => {
+        const modes: string[] = [];
+
         const result = await prepareAndroidProxySession({
             apiModel: {
                 getConfig: async () => ({ certificateContent: 'cert-data' })
             } as any,
             proxyPort: 8000,
-            createRemoteSession: async () => undefined
+            createRemoteSession: async (_proxyPort, mode) => {
+                modes.push(mode);
+                return undefined;
+            }
         });
 
         expect(result.success).to.equal(false);
-        expect(result.source).to.equal('existing-config');
-        expect(result.errors).to.deep.equal(['existing-config-without-rule-session-handle']);
+        expect(result.source).to.equal('unavailable');
+        expect(result.staleExistingConfig).to.equal(true);
+        expect(result.ruleSessionHandleAvailable).to.equal(false);
+        expect(result.errors).to.deep.equal(['stale-existing-config-without-proxy-session']);
+        expect(modes).to.deep.equal(['existing', 'start']);
+    });
+
+    it('fails stale existing config recovery when refreshed config is unavailable', async () => {
+        let getConfigCalls = 0;
+        const result = await prepareAndroidProxySession({
+            apiModel: {
+                getConfig: async () => {
+                    getConfigCalls += 1;
+                    return getConfigCalls === 1 ? { certificateContent: 'cert-data' } : undefined;
+                }
+            } as any,
+            proxyPort: 8000,
+            createRemoteSession: async (_proxyPort, mode) => mode === 'start'
+                ? ({
+                    forGet: () => ({ thenJson: async () => undefined, thenReply: async () => undefined }),
+                    forAnyRequest: () => ({ thenPassThrough: async () => undefined })
+                } as any)
+                : undefined
+        });
+
+        expect(result.success).to.equal(false);
+        expect(result.staleExistingConfig).to.equal(true);
+        expect(result.errors).to.deep.equal(['stale-existing-config-recovery-config-unavailable']);
+    });
+
+    it('fails stale existing config recovery when refreshed certificate is unavailable', async () => {
+        let getConfigCalls = 0;
+        const result = await prepareAndroidProxySession({
+            apiModel: {
+                getConfig: async () => {
+                    getConfigCalls += 1;
+                    return getConfigCalls === 1
+                        ? { certificateContent: 'cert-data' }
+                        : { certificateContent: '' };
+                }
+            } as any,
+            proxyPort: 8000,
+            createRemoteSession: async (_proxyPort, mode) => mode === 'start'
+                ? ({
+                    forGet: () => ({ thenJson: async () => undefined, thenReply: async () => undefined }),
+                    forAnyRequest: () => ({ thenPassThrough: async () => undefined })
+                } as any)
+                : undefined
+        });
+
+        expect(result.success).to.equal(false);
+        expect(result.source).to.equal('stale-existing-config-recovered-by-remote-start');
+        expect(result.staleExistingConfig).to.equal(true);
+        expect(result.errors).to.deep.equal(['stale-existing-config-recovery-certificate-unavailable']);
     });
 
     it('starts remote session exactly once and checks config after start', async () => {
@@ -77,6 +170,8 @@ describe('prepareAndroidProxySession', () => {
 
         expect(result.success).to.equal(true);
         expect(result.source).to.equal('mockttp-remote-start');
+        expect(result.staleExistingConfig).to.equal(false);
+        expect(result.ruleSessionHandleAvailable).to.equal(true);
         expect(result.session).to.equal(sharedSession);
         expect(getConfigCalls).to.equal(2);
         expect(modes).to.deep.equal(['start']);
@@ -96,6 +191,7 @@ describe('prepareAndroidProxySession', () => {
 
         expect(result.success).to.equal(false);
         expect(result.source).to.equal('unavailable');
+        expect(result.ruleSessionHandleAvailable).to.equal(true);
         expect(result.errors).to.deep.equal(['proxy-config-unavailable']);
     });
 
@@ -119,6 +215,7 @@ describe('prepareAndroidProxySession', () => {
         expect(result.source).to.equal('mockttp-remote-start');
         expect(result.configAvailable).to.equal(true);
         expect(result.certificateAvailable).to.equal(false);
+        expect(result.ruleSessionHandleAvailable).to.equal(true);
         expect(result.errors).to.deep.equal(['proxy-certificate-unavailable']);
     });
 
@@ -133,6 +230,7 @@ describe('prepareAndroidProxySession', () => {
 
         expect(result.success).to.equal(false);
         expect(result.source).to.equal('mockttp-remote-start');
+        expect(result.ruleSessionHandleAvailable).to.equal(false);
         expect(result.errors).to.deep.equal(['proxy-rule-session-unavailable']);
     });
 

@@ -7,6 +7,7 @@ const DEFAULT_ORIGIN = 'https://app.httptoolkit.tech';
 
 export type AndroidProxySessionSource =
     | 'existing-config'
+    | 'stale-existing-config-recovered-by-remote-start'
     | 'mockttp-remote-start'
     | 'unavailable';
 
@@ -16,6 +17,8 @@ export interface AndroidProxySessionResult {
     source: AndroidProxySessionSource;
     configAvailable: boolean;
     certificateAvailable: boolean;
+    staleExistingConfig: boolean;
+    ruleSessionHandleAvailable: boolean;
     certificateContent?: string;
     session?: Pick<Mockttp, 'forGet' | 'forAnyRequest'>;
     errors: string[];
@@ -44,36 +47,89 @@ export async function prepareAndroidProxySession(options: {
                 source: 'existing-config',
                 configAvailable: true,
                 certificateAvailable: false,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: false,
                 errors: ['proxy-certificate-unavailable'],
                 warnings: []
             };
         }
 
         if (initialConfig && initialCertificate) {
-            const session = await createRemoteSession(options.proxyPort, 'existing');
-            if (!session) {
+            const existingSession = await createRemoteSession(options.proxyPort, 'existing');
+            if (existingSession) {
                 return {
-                    success: false,
+                    success: true,
                     proxyPort: options.proxyPort,
                     source: 'existing-config',
                     configAvailable: true,
                     certificateAvailable: true,
+                    staleExistingConfig: false,
+                    ruleSessionHandleAvailable: true,
                     certificateContent: initialCertificate,
-                    errors: ['existing-config-without-rule-session-handle'],
+                    session: existingSession,
+                    errors: [],
                     warnings: []
+                };
+            }
+
+            const recoveredSession = await createRemoteSession(options.proxyPort, 'start');
+            if (!recoveredSession) {
+                return {
+                    success: false,
+                    proxyPort: options.proxyPort,
+                    source: 'unavailable',
+                    configAvailable: true,
+                    certificateAvailable: true,
+                    staleExistingConfig: true,
+                    ruleSessionHandleAvailable: false,
+                    certificateContent: initialCertificate,
+                    errors: ['stale-existing-config-without-proxy-session'],
+                    warnings: ['existing-config-without-rule-session-handle']
+                };
+            }
+
+            const recoveredConfig = await options.apiModel.getConfig(options.proxyPort);
+            if (!recoveredConfig) {
+                return {
+                    success: false,
+                    proxyPort: options.proxyPort,
+                    source: 'unavailable',
+                    configAvailable: false,
+                    certificateAvailable: false,
+                    staleExistingConfig: true,
+                    ruleSessionHandleAvailable: true,
+                    errors: ['stale-existing-config-recovery-config-unavailable'],
+                    warnings: ['existing-config-without-rule-session-handle']
+                };
+            }
+
+            const recoveredCertificate = readCertificateContent(recoveredConfig);
+            if (!recoveredCertificate) {
+                return {
+                    success: false,
+                    proxyPort: options.proxyPort,
+                    source: 'stale-existing-config-recovered-by-remote-start',
+                    configAvailable: true,
+                    certificateAvailable: false,
+                    staleExistingConfig: true,
+                    ruleSessionHandleAvailable: true,
+                    errors: ['stale-existing-config-recovery-certificate-unavailable'],
+                    warnings: ['existing-config-without-rule-session-handle']
                 };
             }
 
             return {
                 success: true,
                 proxyPort: options.proxyPort,
-                source: 'existing-config',
+                source: 'stale-existing-config-recovered-by-remote-start',
                 configAvailable: true,
                 certificateAvailable: true,
-                certificateContent: initialCertificate,
-                session,
+                staleExistingConfig: true,
+                ruleSessionHandleAvailable: true,
+                certificateContent: recoveredCertificate,
+                session: recoveredSession,
                 errors: [],
-                warnings: []
+                warnings: ['existing-config-without-rule-session-handle']
             };
         }
 
@@ -85,6 +141,8 @@ export async function prepareAndroidProxySession(options: {
                 source: 'mockttp-remote-start',
                 configAvailable: false,
                 certificateAvailable: false,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: false,
                 errors: ['proxy-rule-session-unavailable'],
                 warnings: []
             };
@@ -100,6 +158,8 @@ export async function prepareAndroidProxySession(options: {
                 source: 'unavailable',
                 configAvailable: false,
                 certificateAvailable: false,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: true,
                 errors: ['proxy-config-unavailable'],
                 warnings: []
             };
@@ -112,6 +172,8 @@ export async function prepareAndroidProxySession(options: {
                 source: 'mockttp-remote-start',
                 configAvailable: true,
                 certificateAvailable: false,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: true,
                 errors: ['proxy-certificate-unavailable'],
                 warnings: []
             };
@@ -123,6 +185,8 @@ export async function prepareAndroidProxySession(options: {
             source: 'mockttp-remote-start',
             configAvailable: true,
             certificateAvailable: true,
+            staleExistingConfig: false,
+            ruleSessionHandleAvailable: true,
             certificateContent: startedCertificate,
             session,
             errors: [],
@@ -135,6 +199,8 @@ export async function prepareAndroidProxySession(options: {
             source: 'unavailable',
             configAvailable: false,
             certificateAvailable: false,
+            staleExistingConfig: false,
+            ruleSessionHandleAvailable: false,
             errors: [error instanceof Error ? error.message : String(error)],
             warnings: []
         };

@@ -103,6 +103,8 @@ export async function startAndroidActivationBridgeServer(options: {
                 proxySessionSource: 'unavailable',
                 configAvailable: false,
                 certificateAvailable: false,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: false,
                 controlPlaneSuccess: false,
                 bootstrapRulesApplied: false,
                 bootstrapResult: emptyBootstrapResult(requestedProxyPort),
@@ -121,7 +123,7 @@ export async function startAndroidActivationBridgeServer(options: {
 
         try {
             const proxySessionPreparation = await prepareProxySession(requestedProxyPort);
-            if (!proxySessionPreparation.success || !proxySessionPreparation.session) {
+            if (!proxySessionPreparation.success || !proxySessionPreparation.ruleSessionHandleAvailable || !proxySessionPreparation.session) {
                 const preparationErrors = proxySessionPreparation.success
                     ? ['proxy-rule-session-unavailable']
                     : proxySessionPreparation.errors;
@@ -134,6 +136,8 @@ export async function startAndroidActivationBridgeServer(options: {
                     proxySessionSource: proxySessionPreparation.source,
                     configAvailable: proxySessionPreparation.configAvailable,
                     certificateAvailable: proxySessionPreparation.certificateAvailable,
+                    staleExistingConfig: proxySessionPreparation.staleExistingConfig,
+                    ruleSessionHandleAvailable: proxySessionPreparation.ruleSessionHandleAvailable,
                     controlPlaneSuccess: false,
                     bootstrapRulesApplied: false,
                     bootstrapResult: emptyBootstrapResult(proxySessionPreparation.proxyPort),
@@ -168,6 +172,8 @@ export async function startAndroidActivationBridgeServer(options: {
                     proxySessionSource: proxySessionPreparation.source,
                     configAvailable: proxySessionPreparation.configAvailable,
                     certificateAvailable: proxySessionPreparation.certificateAvailable,
+                    staleExistingConfig: proxySessionPreparation.staleExistingConfig,
+                    ruleSessionHandleAvailable: proxySessionPreparation.ruleSessionHandleAvailable,
                     bootstrapRulesApplied: false,
                     bootstrapResult,
                     controlPlaneSuccess: false,
@@ -192,6 +198,7 @@ export async function startAndroidActivationBridgeServer(options: {
 
             const controlPlaneSuccess = activationResult.success === true
                 && proxySessionPreparation.success
+                && proxySessionPreparation.ruleSessionHandleAvailable
                 && proxySessionPreparation.certificateAvailable
                 && bootstrapResult.applied;
 
@@ -203,6 +210,8 @@ export async function startAndroidActivationBridgeServer(options: {
                 proxySessionSource: proxySessionPreparation.source,
                 configAvailable: proxySessionPreparation.configAvailable,
                 certificateAvailable: proxySessionPreparation.certificateAvailable,
+                staleExistingConfig: proxySessionPreparation.staleExistingConfig,
+                ruleSessionHandleAvailable: proxySessionPreparation.ruleSessionHandleAvailable,
                 bootstrapRulesApplied: bootstrapResult.applied,
                 bootstrapResult,
                 controlPlaneSuccess,
@@ -220,6 +229,8 @@ export async function startAndroidActivationBridgeServer(options: {
                 proxySessionSource: 'unavailable',
                 configAvailable: false,
                 certificateAvailable: false,
+                staleExistingConfig: false,
+                ruleSessionHandleAvailable: false,
                 controlPlaneSuccess: false,
                 bootstrapRulesApplied: false,
                 bootstrapResult: emptyBootstrapResult(requestedProxyPort),

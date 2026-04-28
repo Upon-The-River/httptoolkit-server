@@ -196,3 +196,42 @@ Lifecycle fix applied:
 6. `controlPlaneSuccess=true` only when session prep succeeded, certificate was available, bootstrap rules were applied, and `activateInterceptor('android-adb', ...)` succeeded.
 
 Raw admin `POST /start` remains documented as an experimental check, but it is not used in the successful bridge session path unless a future design can safely return the exact same rule-session handle without a second start.
+
+## Stale existing-config recovery for Android activation bridge (April 28, 2026)
+
+### Real failure observed
+
+Bridge `start-headless` could return:
+
+- `proxySessionSource="existing-config"`
+- `configAvailable=true`
+- `certificateAvailable=true`
+- `errors=["existing-config-without-rule-session-handle"]`
+
+This happened when `apiModel.getConfig(proxyPort)` still returned config/certificate data, but the actual proxy listener/rule-session handle for that port no longer existed.
+
+### Root cause
+
+Official config/certificate state can outlive the active Mockttp rule-session handle. Existing-config reuse was incorrectly treated as fully usable even when no session handle was available for Android bootstrap rule attachment.
+
+### Recovery behavior now implemented
+
+1. Detect stale existing config if:
+   - initial config exists,
+   - initial certificate exists,
+   - existing rule session handle is unavailable.
+2. Mark `staleExistingConfig=true`.
+3. Run exactly one fresh remote start attempt (`getRemote().start(proxyPort)` via session helper start mode).
+4. Re-read `apiModel.getConfig(proxyPort)` after successful start.
+5. Require refreshed certificate content before continuing.
+6. Apply Android bootstrap rules to the recovered fresh session handle.
+7. Activate `android-adb` only after bootstrap succeeds.
+
+### Structured failure outcomes
+
+- Fresh start cannot provide a handle:
+  - `errors=["stale-existing-config-without-proxy-session"]`
+- Fresh start succeeds but config missing on re-read:
+  - `errors=["stale-existing-config-recovery-config-unavailable"]`
+- Fresh start succeeds but certificate missing on re-read:
+  - `errors=["stale-existing-config-recovery-certificate-unavailable"]`
