@@ -160,6 +160,17 @@ export class AndroidAdbStartHeadlessService {
         shouldWaitForTargetTraffic: boolean,
         baselineBytes: number
     }): Promise<TrafficEvidence> {
+        if (!(options.shouldWaitForTraffic || options.shouldWaitForTargetTraffic)) {
+            return {
+                jsonlAfterBytes: options.baselineBytes,
+                jsonlGrowthObserved: false,
+                newRecordsObserved: false,
+                newTargetRecordsObserved: false,
+                dataPlaneObserved: false,
+                targetTrafficObserved: false
+            };
+        }
+
         let snapshot: TrafficEvidence = {
             jsonlAfterBytes: this.exportFileSink.getOutputStatus().sizeBytes,
             jsonlGrowthObserved: false,
@@ -189,7 +200,7 @@ export class AndroidAdbStartHeadlessService {
             (!options.shouldWaitForTraffic || snapshot.dataPlaneObserved) &&
             (!options.shouldWaitForTargetTraffic || snapshot.targetTrafficObserved);
 
-        if (!(options.shouldWaitForTraffic || options.shouldWaitForTargetTraffic) || satisfied()) {
+        if (satisfied()) {
             return snapshot;
         }
 
@@ -244,9 +255,7 @@ export class AndroidAdbStartHeadlessService {
 
         const shouldWaitForTraffic = input.waitForTraffic === true;
         const shouldWaitForTargetTraffic = input.waitForTargetTraffic === true;
-        const jsonlBaselineBytes = (shouldWaitForTraffic || shouldWaitForTargetTraffic)
-            ? this.exportFileSink.getOutputStatus().sizeBytes
-            : 0;
+        const jsonlBaselineBytes = this.exportFileSink.getOutputStatus().sizeBytes;
 
         const activationResult = await this.activationClient.activateDeviceCapture({
             deviceId,
@@ -362,11 +371,29 @@ export class AndroidAdbStartHeadlessService {
             effectiveProxyPort,
             proxyPort: effectiveProxyPort,
             session: {
-                active: outcome.overallSuccess,
+                active: controlPlaneSuccess,
                 source: 'addon',
                 details: bridgeControlPlaneSuccess
-                    ? { source: 'official-bridge', proxyPort: effectiveProxyPort }
-                    : { created: localSession?.created, sessionUrl: localSession?.sessionUrl }
+                    ? {
+                        source: 'official-bridge',
+                        proxyPort: effectiveProxyPort,
+                        validation: {
+                            overallSuccess: outcome.overallSuccess,
+                            trafficValidated: outcome.trafficValidated,
+                            targetValidated: outcome.targetValidated,
+                            failurePhase: outcome.failurePhase
+                        }
+                    }
+                    : {
+                        created: localSession?.created,
+                        sessionUrl: localSession?.sessionUrl,
+                        validation: {
+                            overallSuccess: outcome.overallSuccess,
+                            trafficValidated: outcome.trafficValidated,
+                            targetValidated: outcome.targetValidated,
+                            failurePhase: outcome.failurePhase
+                        }
+                    }
             },
             controlPlaneSuccess,
             vpnLikelyActive: vpnEvidence.vpnLikelyActive,

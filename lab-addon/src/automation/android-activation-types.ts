@@ -73,7 +73,14 @@ export interface StartHeadlessResponse {
     session: {
         active: boolean;
         source: 'addon';
-        details: Record<string, unknown>;
+        details: Record<string, unknown> & {
+            validation?: {
+                overallSuccess: boolean;
+                trafficValidated: boolean;
+                targetValidated: boolean;
+                failurePhase?: StartHeadlessFailurePhase;
+            };
+        };
     };
     activationResult: unknown;
     warnings?: Array<unknown>;
