@@ -4,9 +4,13 @@ import { matchQidianTraffic } from '../qidian/qidian-traffic-matcher';
 import { LatestSessionState, ObservedTrafficSignal, SessionManager, TargetTrafficSignal } from '../session/session-manager';
 import { AutomationHealthStore } from './automation-health-store';
 import { AndroidActivationClient } from './android-activation-client';
-import { StartHeadlessRequest, StartHeadlessResponse } from './android-activation-types';
+import { StartHeadlessEvidence, StartHeadlessFailurePhase, StartHeadlessRequest, StartHeadlessResponse } from './android-activation-types';
 
 const DEFAULT_PROXY_PORT = 8000;
+const TRAFFIC_WAIT_TIMEOUT_MS = 10_000;
+const TRAFFIC_WAIT_POLL_MS = 500;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const resolveActivationMode = (activationResult: { success: boolean, details?: Record<string, unknown> }): 'safe-stub' | 'adb-activation' | 'partial' => {
     const explicitMode = activationResult.details?.activationMode;
@@ -47,11 +51,6 @@ interface SessionManagerLike {
     getTargetTrafficSignal(options?: { waitMs?: number, pollIntervalMs?: number }): Promise<TargetTrafficSignal>;
 }
 
-const TRAFFIC_WAIT_TIMEOUT_MS = 10_000;
-const TRAFFIC_WAIT_POLL_MS = 500;
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 export interface AndroidAdbStartHeadlessServiceOptions {
     androidNetworkSafety: AndroidNetworkSafetyApi;
     sessionManager?: SessionManagerLike;
@@ -60,6 +59,84 @@ export interface AndroidAdbStartHeadlessServiceOptions {
     exportFileSink?: Pick<ExportFileSink, 'getOutputStatus' | 'readRecordsForTests' | 'readRecordsSinceOffset'>;
     matchTargetTraffic?: (url: string) => boolean;
 }
+
+type TrafficEvidence = {
+    jsonlAfterBytes: number,
+    jsonlGrowthObserved: boolean,
+    newRecordsObserved: boolean,
+    newTargetRecordsObserved: boolean,
+    dataPlaneObserved: boolean,
+    targetTrafficObserved: boolean
+};
+
+type VpnEvidenceInput = {
+    bridgeControlPlaneSuccess: boolean,
+    observedStates: string[],
+    activeNetworkMentionsVpn: boolean
+};
+
+type VpnEvidence = Pick<StartHeadlessEvidence,
+    'proxyVpnRunnableSeen' |
+    'activityMentionsHttpToolkit' |
+    'dumpsysVpnAvailable' |
+    'dumpsysVpnMentionsHttpToolkit' |
+    'activeNetworkMentionsVpn' |
+    'bridgeControlPlaneSuccess'> & {
+        vpnLikelyActive: boolean
+    };
+
+const evaluateVpnEvidence = (input: VpnEvidenceInput): VpnEvidence => {
+    const observedStateText = input.observedStates.join(' ').toLowerCase();
+    const proxyVpnRunnableSeen = observedStateText.includes('proxyvpnrunnable') || observedStateText.includes('proxy-vpn-runnable');
+    const activityMentionsHttpToolkit = observedStateText.includes('activity-app-visible');
+    const dumpsysVpnMentionsHttpToolkit = observedStateText.includes('vpn-owner-signal');
+
+    const evidence: VpnEvidence = {
+        bridgeControlPlaneSuccess: input.bridgeControlPlaneSuccess,
+        proxyVpnRunnableSeen,
+        activityMentionsHttpToolkit,
+        dumpsysVpnAvailable: !observedStateText.includes('dumpsys-vpn-unavailable'),
+        dumpsysVpnMentionsHttpToolkit,
+        activeNetworkMentionsVpn: input.activeNetworkMentionsVpn,
+        vpnLikelyActive:
+            (input.bridgeControlPlaneSuccess && proxyVpnRunnableSeen) ||
+            (input.bridgeControlPlaneSuccess && activityMentionsHttpToolkit) ||
+            dumpsysVpnMentionsHttpToolkit ||
+            (input.activeNetworkMentionsVpn && (proxyVpnRunnableSeen || activityMentionsHttpToolkit || dumpsysVpnMentionsHttpToolkit))
+    };
+
+    return evidence;
+};
+
+const evaluateStartHeadlessOutcome = (input: {
+    controlPlaneSuccess: boolean,
+    shouldWaitForTraffic: boolean,
+    shouldWaitForTargetTraffic: boolean,
+    dataPlaneObserved: boolean,
+    targetTrafficObserved: boolean
+}): {
+    trafficValidated: boolean,
+    targetValidated: boolean,
+    overallSuccess: boolean,
+    failurePhase?: StartHeadlessFailurePhase
+} => {
+    const trafficValidated = !input.shouldWaitForTraffic || input.dataPlaneObserved;
+    const targetValidated = !input.shouldWaitForTargetTraffic || input.targetTrafficObserved;
+    const overallSuccess = input.controlPlaneSuccess && trafficValidated && targetValidated;
+
+    let failurePhase: StartHeadlessFailurePhase | undefined;
+    if (!overallSuccess) {
+        if (!input.controlPlaneSuccess) {
+            failurePhase = 'control-plane';
+        } else if (input.shouldWaitForTraffic && !input.dataPlaneObserved) {
+            failurePhase = 'traffic-wait-timeout';
+        } else if (input.shouldWaitForTargetTraffic && !input.targetTrafficObserved) {
+            failurePhase = 'target-wait-timeout';
+        }
+    }
+
+    return { trafficValidated, targetValidated, overallSuccess, failurePhase };
+};
 
 export class AndroidAdbStartHeadlessService {
     private readonly androidNetworkSafety: AndroidNetworkSafetyApi;
@@ -78,10 +155,56 @@ export class AndroidAdbStartHeadlessService {
         this.matchTargetTraffic = options.matchTargetTraffic ?? ((url: string) => matchQidianTraffic(url).matched);
     }
 
+    private async pollOutputWindow(options: {
+        shouldWaitForTraffic: boolean,
+        shouldWaitForTargetTraffic: boolean,
+        baselineBytes: number
+    }): Promise<TrafficEvidence> {
+        let snapshot: TrafficEvidence = {
+            jsonlAfterBytes: this.exportFileSink.getOutputStatus().sizeBytes,
+            jsonlGrowthObserved: false,
+            newRecordsObserved: false,
+            newTargetRecordsObserved: false,
+            dataPlaneObserved: false,
+            targetTrafficObserved: false
+        };
+
+        const evaluateTrafficEvidence = (): TrafficEvidence => {
+            const outputStatus = this.exportFileSink.getOutputStatus();
+            const newRecords = this.exportFileSink.readRecordsSinceOffset(options.baselineBytes);
+            const newTargetRecordsObserved = newRecords.some((record) => typeof record.url === 'string' && this.matchTargetTraffic(record.url));
+
+            return {
+                jsonlAfterBytes: outputStatus.sizeBytes,
+                jsonlGrowthObserved: outputStatus.sizeBytes > options.baselineBytes,
+                newRecordsObserved: newRecords.length > 0,
+                newTargetRecordsObserved,
+                dataPlaneObserved: outputStatus.sizeBytes > options.baselineBytes || newRecords.length > 0,
+                targetTrafficObserved: newTargetRecordsObserved
+            };
+        };
+
+        snapshot = evaluateTrafficEvidence();
+        const satisfied = () =>
+            (!options.shouldWaitForTraffic || snapshot.dataPlaneObserved) &&
+            (!options.shouldWaitForTargetTraffic || snapshot.targetTrafficObserved);
+
+        if (!(options.shouldWaitForTraffic || options.shouldWaitForTargetTraffic) || satisfied()) {
+            return snapshot;
+        }
+
+        const deadline = Date.now() + TRAFFIC_WAIT_TIMEOUT_MS;
+        while (Date.now() < deadline && !satisfied()) {
+            await sleep(TRAFFIC_WAIT_POLL_MS);
+            snapshot = evaluateTrafficEvidence();
+        }
+
+        return snapshot;
+    }
+
     async startHeadless(input: StartHeadlessRequest): Promise<StartHeadlessResponse> {
-        const deviceId = typeof input.deviceId === 'string' && input.deviceId.trim().length > 0
-            ? input.deviceId
-            : undefined;
+        const attemptId = `start-headless-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const deviceId = typeof input.deviceId === 'string' && input.deviceId.trim().length > 0 ? input.deviceId : undefined;
         const allowUnsafeStart = input.allowUnsafeStart === true;
         const enableSocks = input.enableSocks === true;
         const requestedProxyPort = typeof input.proxyPort === 'number' && Number.isInteger(input.proxyPort) && input.proxyPort > 0
@@ -90,38 +213,41 @@ export class AndroidAdbStartHeadlessService {
 
         if (!deviceId) {
             return this.buildFailure({
-                proxyPort: 0,
+                attemptId,
+                requestedProxyPort,
+                effectiveProxyPort: 0,
                 deviceId: undefined,
                 errors: [{ code: 'missing-device-id', message: 'Request body must include deviceId.' }],
                 activationResult: {},
-                networkInspection: undefined
+                networkInspection: undefined,
+                failurePhase: 'control-plane'
             });
         }
 
         const networkInspection = await this.androidNetworkSafety.inspectNetwork({ deviceId });
-        const hasWarnings = (networkInspection.warnings?.length ?? 0) > 0;
-
-        if (hasWarnings && !allowUnsafeStart) {
+        if ((networkInspection.warnings?.length ?? 0) > 0 && !allowUnsafeStart) {
             return this.buildFailure({
-                proxyPort: requestedProxyPort,
+                attemptId,
+                requestedProxyPort,
+                effectiveProxyPort: requestedProxyPort,
                 deviceId,
                 errors: [{
                     code: 'network-baseline-polluted',
                     message: 'Android network baseline contains warnings; set allowUnsafeStart=true to continue.',
-                    details: {
-                        warnings: networkInspection.warnings,
-                        deviceId
-                    }
+                    details: { warnings: networkInspection.warnings, deviceId }
                 }],
-                activationResult: {
-                    blocked: true,
-                    reason: 'network-baseline-polluted'
-                },
-                networkInspection
+                activationResult: { blocked: true, reason: 'network-baseline-polluted' },
+                networkInspection,
+                failurePhase: 'control-plane'
             });
         }
 
-        const beforeOutputSize = this.exportFileSink.getOutputStatus().sizeBytes;
+        const shouldWaitForTraffic = input.waitForTraffic === true;
+        const shouldWaitForTargetTraffic = input.waitForTargetTraffic === true;
+        const jsonlBaselineBytes = (shouldWaitForTraffic || shouldWaitForTargetTraffic)
+            ? this.exportFileSink.getOutputStatus().sizeBytes
+            : 0;
+
         const activationResult = await this.activationClient.activateDeviceCapture({
             deviceId,
             proxyPort: requestedProxyPort,
@@ -138,96 +264,82 @@ export class AndroidAdbStartHeadlessService {
             localSession = await this.sessionManager.startSessionIfNeeded({ proxyPort: requestedProxyPort });
         }
 
-        const proxyPort = typeof bridgeResponse?.proxyPort === 'number'
+        const effectiveProxyPort = bridgeControlPlaneSuccess && typeof bridgeResponse?.proxyPort === 'number'
             ? bridgeResponse.proxyPort
             : localSession?.proxyPort ?? requestedProxyPort;
 
-        const shouldWaitForTraffic = input.waitForTraffic === true;
-        const shouldWaitForTargetTraffic = input.waitForTargetTraffic === true;
-        const shouldPollOutputWindow = shouldWaitForTraffic || shouldWaitForTargetTraffic;
+        const trafficEvidence = await this.pollOutputWindow({
+            shouldWaitForTraffic,
+            shouldWaitForTargetTraffic,
+            baselineBytes: jsonlBaselineBytes
+        });
 
-        let jsonlGrowthObserved = false;
-        let qidianTrafficObserved = false;
-        const outputWindowSatisfied = () =>
-            (!shouldWaitForTraffic || jsonlGrowthObserved) &&
-            (!shouldWaitForTargetTraffic || qidianTrafficObserved);
-        const evaluateOutputWindow = () => {
-            const outputStatus = this.exportFileSink.getOutputStatus();
-            jsonlGrowthObserved = jsonlGrowthObserved || outputStatus.sizeBytes > beforeOutputSize;
-            const newRecords = this.exportFileSink.readRecordsSinceOffset(beforeOutputSize);
-            qidianTrafficObserved = qidianTrafficObserved || newRecords
-                .some((record) => typeof record.url === 'string' && this.matchTargetTraffic(record.url));
-        };
-
-        evaluateOutputWindow();
-        if (shouldPollOutputWindow && !outputWindowSatisfied()) {
-            const deadline = Date.now() + TRAFFIC_WAIT_TIMEOUT_MS;
-            while (Date.now() < deadline && !outputWindowSatisfied()) {
-                await sleep(TRAFFIC_WAIT_POLL_MS);
-                evaluateOutputWindow();
-            }
-        }
-
-        const observedSignal = shouldWaitForTraffic
-            ? await this.sessionManager.getObservedTrafficSignal({ waitMs: 250, pollIntervalMs: 100 })
-            : { observed: false } as ObservedTrafficSignal;
-        const targetSignal = shouldWaitForTargetTraffic
-            ? await this.sessionManager.getTargetTrafficSignal({ waitMs: 250, pollIntervalMs: 100 })
-            : { observed: false } as TargetTrafficSignal;
-
-        const dataPlaneObserved = activationResult.dataPlaneObserved === true || observedSignal.observed || jsonlGrowthObserved;
-        const targetTrafficObserved = activationResult.targetTrafficObserved === true || targetSignal.observed || qidianTrafficObserved;
-        const trafficValidated = dataPlaneObserved || targetTrafficObserved;
-
-        const observedStates = Array.isArray(activationDetails.observedStates) ? activationDetails.observedStates : [];
-        const observedStateText = observedStates.join(' ').toLowerCase();
-        const dumpsysVpnAvailable = !observedStateText.includes('dumpsys-vpn-unavailable');
-        const activityMentionsHttpToolkit = observedStateText.includes('activity-app-visible');
-        const proxyVpnRunnableSeen = observedStateText.includes('proxyvpnrunnable') || observedStateText.includes('proxy-vpn-runnable');
-        const vpnEvidence = {
-            dumpsysVpnAvailable,
-            dumpsysVpnMentionsHttpToolkit: observedStateText.includes('vpn-owner-signal'),
-            activityMentionsHttpToolkit,
-            proxyVpnRunnableSeen,
-            activeNetworkMentionsVpn: networkInspection.vpn.activeNetworkMentionsVpn === true,
-            bridgeControlPlaneSuccess,
-            qidianTrafficObserved,
-            jsonlGrowthObserved
-        };
-        const vpnLikelyActive =
-            (vpnEvidence.bridgeControlPlaneSuccess && vpnEvidence.proxyVpnRunnableSeen) ||
-            (vpnEvidence.bridgeControlPlaneSuccess && vpnEvidence.activityMentionsHttpToolkit && vpnEvidence.qidianTrafficObserved) ||
-            (vpnEvidence.bridgeControlPlaneSuccess && vpnEvidence.jsonlGrowthObserved) ||
-            (vpnEvidence.activeNetworkMentionsVpn && vpnEvidence.qidianTrafficObserved);
-
-        const warningStrings = [
-            ...(activationResult.errors ?? []),
-            ...((Array.isArray(bridgeResponse?.errors) ? bridgeResponse?.errors : []) as string[]),
-            JSON.stringify(activationDetails)
-        ];
-        const warningCodes = Array.from(new Set(warningStrings.map((entry) => toWarningCode(entry)).filter((entry): entry is string => Boolean(entry))));
-
+        const dataPlaneObserved = trafficEvidence.dataPlaneObserved;
+        const targetTrafficObserved = trafficEvidence.targetTrafficObserved;
         const controlPlaneSuccess = bridgeControlPlaneSuccess || (activationResult.success === true && !usedOfficialBridge);
-        const success = controlPlaneSuccess && ((input.waitForTraffic === true) ? (trafficValidated || vpnLikelyActive) : true);
-        if (!success && localSession) {
+
+        const observedStates = Array.isArray(activationDetails.observedStates)
+            ? activationDetails.observedStates.map((entry) => String(entry))
+            : [];
+
+        const vpnEvidence = evaluateVpnEvidence({
+            bridgeControlPlaneSuccess,
+            observedStates,
+            activeNetworkMentionsVpn: networkInspection.vpn.activeNetworkMentionsVpn === true
+        });
+
+        const outcome = evaluateStartHeadlessOutcome({
+            controlPlaneSuccess,
+            shouldWaitForTraffic,
+            shouldWaitForTargetTraffic,
+            dataPlaneObserved,
+            targetTrafficObserved
+        });
+
+        if (!outcome.overallSuccess && localSession) {
             await this.sessionManager.stopLatestSession();
         }
 
-        const activationMode = bridgeControlPlaneSuccess
-            ? 'adb-activation'
-            : resolveActivationMode(activationResult);
+        const warningStrings = [
+            ...(activationResult.errors ?? []),
+            ...((Array.isArray(bridgeResponse?.errors) ? bridgeResponse.errors : []) as string[]),
+            JSON.stringify(activationDetails)
+        ];
+        const warningCodes = Array.from(new Set(warningStrings
+            .map((entry) => toWarningCode(entry))
+            .filter((entry): entry is string => Boolean(entry))));
 
+        const evidence: StartHeadlessEvidence = {
+            bridgeControlPlaneSuccess,
+            bridgeProxyPort: typeof bridgeResponse?.proxyPort === 'number' ? bridgeResponse.proxyPort : undefined,
+            proxyVpnRunnableSeen: vpnEvidence.proxyVpnRunnableSeen,
+            activityMentionsHttpToolkit: vpnEvidence.activityMentionsHttpToolkit,
+            dumpsysVpnAvailable: vpnEvidence.dumpsysVpnAvailable,
+            dumpsysVpnMentionsHttpToolkit: vpnEvidence.dumpsysVpnMentionsHttpToolkit,
+            activeNetworkMentionsVpn: vpnEvidence.activeNetworkMentionsVpn,
+            jsonlBaselineBytes,
+            jsonlAfterBytes: trafficEvidence.jsonlAfterBytes,
+            jsonlGrowthObserved: trafficEvidence.jsonlGrowthObserved,
+            newRecordsObserved: trafficEvidence.newRecordsObserved,
+            newTargetRecordsObserved: trafficEvidence.newTargetRecordsObserved
+        };
+
+        const activationMode = bridgeControlPlaneSuccess ? 'adb-activation' : resolveActivationMode(activationResult);
         const startResult = {
-            success,
+            attemptId,
+            requestedProxyPort,
+            effectiveProxyPort,
             controlPlaneSuccess,
+            vpnLikelyActive: vpnEvidence.vpnLikelyActive,
             dataPlaneObserved,
             targetTrafficObserved,
-            trafficValidated,
-            allowUnsafeStart,
-            proxyPort,
-            bridgeResponse,
-            errors: activationResult.errors ?? [],
+            trafficValidated: outcome.trafficValidated,
+            targetValidated: outcome.targetValidated,
+            overallSuccess: outcome.overallSuccess,
+            failurePhase: outcome.failurePhase,
+            evidence,
             warnings: warningCodes,
+            errors: activationResult.errors ?? [],
             observedAt: new Date().toISOString()
         };
 
@@ -235,47 +347,48 @@ export class AndroidAdbStartHeadlessService {
             lastRoute: 'POST /automation/android-adb/start-headless',
             lastDeviceId: deviceId,
             lastStartHeadless: startResult,
-            ...(success ? { lastSuccessfulStartHeadless: startResult } : { lastFailure: startResult }),
+            ...(outcome.overallSuccess ? { lastSuccessfulStartHeadless: startResult } : { lastFailure: startResult }),
+            ...(controlPlaneSuccess ? { lastControlPlaneSuccessfulStartHeadless: startResult } : {}),
             lastNetworkInspection: networkInspection,
             activationMode
         });
 
         return {
-            success,
+            success: outcome.overallSuccess,
+            overallSuccess: outcome.overallSuccess,
+            attemptId,
             deviceId,
-            proxyPort,
+            requestedProxyPort,
+            effectiveProxyPort,
+            proxyPort: effectiveProxyPort,
             session: {
-                active: success,
+                active: outcome.overallSuccess,
                 source: 'addon',
                 details: bridgeControlPlaneSuccess
-                    ? { source: 'official-bridge', proxyPort }
-                    : {
-                        created: localSession?.created,
-                        sessionUrl: localSession?.sessionUrl
-                    }
+                    ? { source: 'official-bridge', proxyPort: effectiveProxyPort }
+                    : { created: localSession?.created, sessionUrl: localSession?.sessionUrl }
             },
             controlPlaneSuccess,
+            vpnLikelyActive: vpnEvidence.vpnLikelyActive,
             dataPlaneObserved,
             targetTrafficObserved,
-            trafficValidated,
+            trafficValidated: outcome.trafficValidated,
+            targetValidated: outcome.targetValidated,
+            failurePhase: outcome.failurePhase,
+            evidence,
             activationResult: bridgeControlPlaneSuccess
-                ? {
-                    implemented: true,
-                    activationMode: 'official-bridge',
-                    bridgeResponse
-                }
+                ? { implemented: true, activationMode: 'official-bridge', bridgeResponse }
                 : (activationResult.details ?? { success: activationResult.success }),
             warnings: warningCodes,
-            vpnEvidence,
-            vpnLikelyActive,
             health,
-            errors: success
+            errors: outcome.overallSuccess
                 ? []
                 : [{
                     code: 'activation-failed',
-                    message: 'Activation did not produce usable success evidence.',
+                    message: 'Activation did not satisfy start-headless validation contract.',
                     details: {
-                        errors: activationResult.errors ?? []
+                        failurePhase: outcome.failurePhase,
+                        activationErrors: activationResult.errors ?? []
                     }
                 }]
         };
@@ -326,16 +439,45 @@ export class AndroidAdbStartHeadlessService {
     }
 
     private buildFailure(options: {
-        proxyPort: number,
+        attemptId: string,
+        requestedProxyPort: number,
+        effectiveProxyPort: number,
+        proxyPort?: number,
         deviceId: string | undefined,
         errors: Array<unknown>,
         activationResult: unknown,
-        networkInspection: unknown
+        networkInspection: unknown,
+        failurePhase: StartHeadlessFailurePhase
     }): StartHeadlessResponse {
+        const evidence: StartHeadlessEvidence = {
+            bridgeControlPlaneSuccess: false,
+            bridgeProxyPort: undefined,
+            proxyVpnRunnableSeen: false,
+            activityMentionsHttpToolkit: false,
+            dumpsysVpnAvailable: true,
+            dumpsysVpnMentionsHttpToolkit: false,
+            activeNetworkMentionsVpn: false,
+            jsonlBaselineBytes: 0,
+            jsonlAfterBytes: 0,
+            jsonlGrowthObserved: false,
+            newRecordsObserved: false,
+            newTargetRecordsObserved: false
+        };
+
         const failedAttempt = {
-            success: false,
+            attemptId: options.attemptId,
+            requestedProxyPort: options.requestedProxyPort,
+            effectiveProxyPort: options.effectiveProxyPort,
             controlPlaneSuccess: false,
-            proxyPort: options.proxyPort,
+            vpnLikelyActive: false,
+            dataPlaneObserved: false,
+            targetTrafficObserved: false,
+            trafficValidated: false,
+            targetValidated: false,
+            overallSuccess: false,
+            failurePhase: options.failurePhase,
+            evidence,
+            warnings: [],
             errors: options.errors,
             observedAt: new Date().toISOString()
         };
@@ -351,20 +493,31 @@ export class AndroidAdbStartHeadlessService {
 
         return {
             success: false,
+            overallSuccess: false,
+            attemptId: options.attemptId,
             deviceId: options.deviceId,
-            proxyPort: options.proxyPort,
+            requestedProxyPort: options.requestedProxyPort,
+            effectiveProxyPort: options.effectiveProxyPort,
+            proxyPort: options.proxyPort ?? options.effectiveProxyPort,
             session: {
                 active: false,
                 source: 'addon',
                 details: {}
             },
             controlPlaneSuccess: false,
+            vpnLikelyActive: false,
             dataPlaneObserved: false,
             targetTrafficObserved: false,
             trafficValidated: false,
+            targetValidated: false,
+            failurePhase: options.failurePhase,
+            evidence,
             activationResult: options.activationResult,
+            warnings: [],
             health,
             errors: options.errors
         };
     }
 }
+
+export { TRAFFIC_WAIT_POLL_MS, TRAFFIC_WAIT_TIMEOUT_MS };
