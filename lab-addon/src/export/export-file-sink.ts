@@ -43,10 +43,10 @@ export class ExportFileSink {
     }
 
     readRecordsForTests(): NormalizedExportRecord[] {
-        return this.readRecordsSinceOffsetForTests(0);
+        return this.readRecordsSinceOffset(0);
     }
 
-    readRecordsSinceOffsetForTests(startOffsetBytes: number): NormalizedExportRecord[] {
+    readRecordsSinceOffset(startOffsetBytes: number): NormalizedExportRecord[] {
         if (!fs.existsSync(this.paths.jsonlPath)) return [];
 
         const stats = fs.statSync(this.paths.jsonlPath);
@@ -55,6 +55,17 @@ export class ExportFileSink {
         return content
             .split(/\r?\n/)
             .filter((line) => line.trim().length > 0)
-            .map((line) => JSON.parse(line) as NormalizedExportRecord);
+            .reduce<NormalizedExportRecord[]>((records, line) => {
+                try {
+                    records.push(JSON.parse(line) as NormalizedExportRecord);
+                } catch {
+                    // Best-effort JSONL parsing: tolerate partially-written trailing lines.
+                }
+                return records;
+            }, []);
+    }
+
+    readRecordsSinceOffsetForTests(startOffsetBytes: number): NormalizedExportRecord[] {
+        return this.readRecordsSinceOffset(startOffsetBytes);
     }
 }
