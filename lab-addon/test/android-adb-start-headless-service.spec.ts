@@ -121,14 +121,18 @@ const makeService = (options: ServiceFactoryOptions = {}) => {
 };
 
 describe('AndroidAdbStartHeadlessService matrix', () => {
-    it('A: no wait flags succeeds on control-plane only and never starts local 8001 session', async () => {
-        const { service, getStartCalls } = makeService();
+    it('A: no wait flags succeeds on control-plane only, does not use historical JSONL as evidence, and never starts local 8001 session', async () => {
+        const { service, getStartCalls } = makeService({ outputSizes: [250, 250], recordsTimeline: [[], []] });
         const result = await service.startHeadless({ deviceId: 'device-1', proxyPort: 8000 });
 
         assert.equal(result.overallSuccess, true);
         assert.equal(result.controlPlaneSuccess, true);
+        assert.equal(result.dataPlaneObserved, false);
         assert.equal(result.trafficValidated, true);
         assert.equal(result.targetValidated, true);
+        assert.equal(result.evidence.jsonlBaselineBytes, 250);
+        assert.equal(result.evidence.jsonlAfterBytes, 250);
+        assert.equal(result.evidence.jsonlGrowthObserved, false);
         assert.equal(result.effectiveProxyPort, 8000);
         assert.equal(getStartCalls(), 0);
     });
@@ -180,6 +184,13 @@ describe('AndroidAdbStartHeadlessService matrix', () => {
         assert.equal(result.targetTrafficObserved, false);
         assert.equal(result.overallSuccess, false);
         assert.equal(result.failurePhase, 'target-wait-timeout');
+        assert.equal(result.session.active, true);
+        assert.deepEqual(result.session.details.validation, {
+            overallSuccess: false,
+            trafficValidated: true,
+            targetValidated: false,
+            failurePhase: 'target-wait-timeout'
+        });
     });
 
     it('C: non-target growth alone fails target wait', async () => {
@@ -300,5 +311,23 @@ describe('AndroidAdbStartHeadlessService matrix', () => {
         const result = await service.startHeadless({ deviceId: 'device-1' });
         assert.equal(getStartCalls(), 1);
         assert.equal(result.effectiveProxyPort, 8001);
+    });
+
+    it('H: does not start local session when bridge control-plane succeeds on 8001-adjacent environment', async () => {
+        const { service, getStartCalls } = makeService({
+            activationResult: {
+                success: true,
+                details: {
+                    activationMode: 'adb-activation',
+                    bridgeResponse: { success: true, controlPlaneSuccess: true, proxyPort: 8000 }
+                },
+                errors: []
+            }
+        });
+
+        const result = await service.startHeadless({ deviceId: 'device-1', proxyPort: 8000 });
+        assert.equal(result.controlPlaneSuccess, true);
+        assert.equal(result.effectiveProxyPort, 8000);
+        assert.equal(getStartCalls(), 0);
     });
 });

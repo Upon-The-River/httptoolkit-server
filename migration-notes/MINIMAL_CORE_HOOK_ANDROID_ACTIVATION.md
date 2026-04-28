@@ -259,6 +259,34 @@ Real-device runs now confirm the official core bridge control-plane path is heal
 
 ### VPN recognition evidence hierarchy
 
+## Start-headless state/evidence semantic follow-up (April 28, 2026)
+
+Two addon-side semantics were tightened without changing the official core bridge contract:
+
+1. **No-wait evidence no longer infers data-plane from historical JSONL bytes**
+   - Addon now always captures current JSONL size as baseline before activation.
+   - When neither `waitForTraffic` nor `waitForTargetTraffic` is requested, output polling is skipped.
+   - No-wait responses explicitly report:
+     - `jsonlAfterBytes = jsonlBaselineBytes`
+     - `jsonlGrowthObserved = false`
+     - `newRecordsObserved = false`
+     - `newTargetRecordsObserved = false`
+     - `dataPlaneObserved = false`
+     - `targetTrafficObserved = false`
+   - `overallSuccess` remains control-plane driven in no-wait mode.
+
+2. **`session.active` now reflects control-plane activation, not validation completion**
+   - `session.active` is now set from `controlPlaneSuccess`.
+   - Validation outcomes remain exposed at response top-level (`overallSuccess`, `failurePhase`) and are also attached in `session.details.validation`:
+     - `overallSuccess`
+     - `trafficValidated`
+     - `targetValidated`
+     - `failurePhase`
+
+This preserves the explicit matrix semantics:
+
+`overallSuccess = controlPlaneSuccess && trafficValidated && targetValidated`
+
 Some devices return `Can't find service: vpn` for `dumpsys vpn` even while capture is active. Addon now treats that as warning evidence (`dumpsys-vpn-unavailable`) and computes `vpnLikelyActive` from combined signals, including:
 
 - bridge control-plane success,
