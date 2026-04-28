@@ -131,3 +131,48 @@ curl -i -X POST "http://127.0.0.1:45456/start?port=8000"
 curl -i -X POST "http://127.0.0.1:45456/start?port=8000" \
   -H "origin: https://app.httptoolkit.tech"
 ```
+
+## Session-preparation alignment with old working-fork (April 28, 2026)
+
+### Why pure addon mode was still insufficient
+
+Addon-only activation could trigger control endpoints, but it could not guarantee that official core state for `proxyPort` was actually prepared (config + certificate + bootstrap rules on the same proxy session).
+
+### Why `45456/start` HTTP `200` is not enough
+
+A successful `POST /start` on Mockttp admin (`45456`) only confirms a start request response. It does **not** guarantee Android activation readiness. The bridge must still verify official config/certificate availability through `apiModel.getConfig(proxyPort)` before attempting interceptor activation.
+
+### Minimal behavior restored from old implementation
+
+A focused official helper (`src/automation/android-session-manager.ts`) now restores the minimum old `startSessionIfNeeded` readiness pattern:
+
+1. Try `apiModel.getConfig(proxyPort)` first (reuse path).
+2. If unavailable, call `POST http://127.0.0.1:45456/start?port=<proxyPort>` with `Origin: https://app.httptoolkit.tech`.
+3. Re-check `apiModel.getConfig(proxyPort)`.
+4. Require certificate content before continuing.
+5. Return structured readiness diagnostics (`source`, `configAvailable`, `certificateAvailable`, `errors`, `warnings`).
+
+Bridge ordering is now explicit and strict:
+
+1. Prepare/reuse proxy session config.
+2. Apply Android bootstrap rules to that proxy port.
+3. Activate `android-adb` interceptor.
+4. Report control-plane success only when both bootstrap and activation succeed.
+5. Keep `dataPlaneObserved=false` unless real traffic is observed.
+
+### What is still intentionally not restored
+
+- No wholesale restore of old `src/api/rest-api.ts` automation block.
+- No Qidian-specific behavior in official core bridge/session helper.
+- No JSONL/live-export persistence introduced into Android activation path.
+- No real-device dependency in unit tests.
+
+### Validation commands
+
+```bash
+npm run build:src
+npm run test:unit
+cd lab-addon
+npm run typecheck
+npm test
+```

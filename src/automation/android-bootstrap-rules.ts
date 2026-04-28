@@ -18,13 +18,16 @@ export async function prepareAndroidBootstrapRules(
     options: {
         session?: Pick<Mockttp, 'forGet' | 'forAnyRequest'>;
         ensurePassThroughFallback?: boolean;
+        certificateContent?: string;
     } = {}
 ): Promise<AndroidBootstrapResult> {
     const warnings: string[] = [];
     const rules: string[] = [];
 
-    const config = await apiModel.getConfig(proxyPort);
-    const certificateContent = config?.certificateContent;
+    const config = options.certificateContent === undefined
+        ? await apiModel.getConfig(proxyPort)
+        : undefined;
+    const certificateContent = options.certificateContent ?? config?.certificateContent;
     const certificateAvailable = typeof certificateContent === 'string' && certificateContent.length > 0;
 
     if (!certificateAvailable) {
