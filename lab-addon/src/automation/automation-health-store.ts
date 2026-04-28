@@ -3,8 +3,10 @@ export interface AutomationHealthSnapshot {
     lastRoute?: string;
     lastDeviceId?: string;
     lastStartHeadless?: unknown;
+    lastSuccessfulStartHeadless?: unknown;
     lastStopHeadless?: unknown;
     lastRecoverHeadless?: unknown;
+    lastFailure?: unknown;
     lastNetworkInspection?: unknown;
     activationMode?: 'safe-stub' | 'adb-activation' | 'partial';
 }

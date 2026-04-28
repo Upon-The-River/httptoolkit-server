@@ -49,7 +49,7 @@ export class SessionManager {
         private matchTargetTraffic: (url: string) => boolean = (url: string) => matchQidianTraffic(url).matched
     ) {}
 
-    async startSessionIfNeeded(): Promise<ActiveSessionResult> {
+    async startSessionIfNeeded(options: { proxyPort?: number } = {}): Promise<ActiveSessionResult> {
         if (this.latestSessionState.active && this.latestSession) {
             return {
                 created: false,
@@ -59,7 +59,11 @@ export class SessionManager {
         }
 
         const remoteSession = this.buildRemoteSession();
-        await remoteSession.start();
+        if (typeof options.proxyPort === 'number') {
+            await remoteSession.start(options.proxyPort);
+        } else {
+            await remoteSession.start();
+        }
 
         this.latestSession = remoteSession;
         this.latestSessionState = {

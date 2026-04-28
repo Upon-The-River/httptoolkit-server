@@ -100,17 +100,19 @@ export class AdbAndroidActivationClient implements AndroidActivationClient {
         }
 
         const bridgeSuccess = payload.success === true;
+        const bridgeControlPlaneSuccess = payload.controlPlaneSuccess === true;
+        const effectiveSuccess = bridgeSuccess && bridgeControlPlaneSuccess;
         return {
-            success: bridgeSuccess,
+            success: effectiveSuccess,
             details: {
                 implemented: true,
-                partial: !bridgeSuccess,
+                partial: !effectiveSuccess,
                 safeStub: false,
-                activationMode: bridgeSuccess ? 'adb-activation' : 'partial',
+                activationMode: effectiveSuccess ? 'official-bridge' : 'partial',
                 bridgeUrl: url,
                 bridgeResponse: payload
             },
-            errors: bridgeSuccess ? [] : ['official-bridge-failed']
+            errors: effectiveSuccess ? [] : ['official-bridge-failed']
         };
     }
 

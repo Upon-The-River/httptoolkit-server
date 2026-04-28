@@ -30,6 +30,7 @@ export interface AndroidRecoverResult {
 
 export interface StartHeadlessRequest {
     deviceId?: string;
+    proxyPort?: number;
     allowUnsafeStart?: boolean;
     enableSocks?: boolean;
     waitForTraffic?: boolean;
@@ -50,6 +51,9 @@ export interface StartHeadlessResponse {
     targetTrafficObserved: boolean;
     trafficValidated: boolean;
     activationResult: unknown;
+    warnings?: Array<unknown>;
+    vpnEvidence?: Record<string, unknown>;
+    vpnLikelyActive?: boolean;
     health: unknown;
     errors: Array<unknown>;
 }
