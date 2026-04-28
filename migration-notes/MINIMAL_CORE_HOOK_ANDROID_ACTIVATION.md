@@ -176,3 +176,21 @@ cd lab-addon
 npm run typecheck
 npm test
 ```
+
+## Android bridge session lifecycle fix (April 28, 2026)
+
+Issue observed in the April 27 package:
+
+1. Session preparation called Mockttp admin `POST /start?port=<proxyPort>`.
+2. Bridge then created a second remote session and called `session.start(proxyPort)` again.
+3. Duplicate start could trigger `EADDRINUSE` and unstable setup.
+4. Bridge finally block stopped the managed session immediately after bootstrap rules, which could tear down proxy readiness before Android validation finished.
+
+Lifecycle fix applied:
+
+1. Bridge now prepares proxy readiness and rule session in one step (`prepareAndroidProxySession`).
+2. Start path calls admin `POST /start` once (trusted Origin), then calls remote `start(proxyPort)` once for the single rule session handle.
+3. Existing-config path does not call admin start; if a safe rule-session handle is unavailable, bridge returns `existing-config-without-rule-session-handle` and stops.
+4. Bootstrap rules are applied to the exact session returned by preparation.
+5. Bridge no longer stops the session in `start-headless`; proxy stays alive for Android app bootstrap and validation.
+6. `controlPlaneSuccess=true` only when session prep succeeded, certificate was available, bootstrap rules were applied, and `activateInterceptor('android-adb', ...)` succeeded.
