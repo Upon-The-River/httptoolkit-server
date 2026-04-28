@@ -235,3 +235,53 @@ Official config/certificate state can outlive the active Mockttp rule-session ha
   - `errors=["stale-existing-config-recovery-config-unavailable"]`
 - Fresh start succeeds but certificate missing on re-read:
   - `errors=["stale-existing-config-recovery-certificate-unavailable"]`
+
+## Addon wrapper/health/data-plane alignment after core bridge success (April 28, 2026)
+
+Real-device runs now confirm the official core bridge control-plane path is healthy on `45458` with:
+
+- `success=true`
+- `controlPlaneSuccess=true`
+- `proxyPort=8000`
+- `proxySessionSource="stale-existing-config-recovered-by-remote-start"`
+- `bootstrapRulesApplied=true`
+- `ruleSessionHandleAvailable=true`
+- `errors=[]`
+
+### What was fixed in addon wrapper behavior
+
+1. Addon `POST /automation/android-adb/start-headless` now treats official bridge success as authoritative control-plane success.
+2. Wrapper preserves bridge proxy port (e.g. `8000`) and avoids addon-side second-start allocation on `8001`.
+3. Health now keeps both:
+   - `lastStartHeadless` (latest attempt)
+   - `lastSuccessfulStartHeadless` (last known good control-plane result)
+4. Later failed/redundant attempts no longer erase the last successful bridge state.
+
+### VPN recognition evidence hierarchy
+
+Some devices return `Can't find service: vpn` for `dumpsys vpn` even while capture is active. Addon now treats that as warning evidence (`dumpsys-vpn-unavailable`) and computes `vpnLikelyActive` from combined signals, including:
+
+- bridge control-plane success,
+- HTTP Toolkit activity/runnable signals when available,
+- connectivity VPN mentions,
+- JSONL growth and target traffic observations.
+
+### Data-plane validation improvement
+
+Addon now uses export output status and persisted JSONL records as strong data-plane evidence:
+
+- output-size growth across activation window,
+- target traffic matcher hits in persisted records.
+
+On this device, real Qidian JSONL growth is stronger proof of active capture than `dumpsys vpn` availability.
+
+### Warning-only noise patterns
+
+These log patterns are now classified as warnings and do not force control-plane failure by themselves:
+
+- `docker-unavailable`
+- `unsupported-su-root-syntax`
+- `non-tls-client-on-tls-path`
+- `upstream-dns-failure`
+- `upstream-socket-hangup`
+- `vpn-ipv6-packet-warning`

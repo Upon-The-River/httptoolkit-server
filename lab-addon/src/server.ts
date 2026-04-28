@@ -25,7 +25,7 @@ import {
 } from './session/session-manager';
 
 export interface SessionManagerLike {
-    startSessionIfNeeded(): Promise<{
+    startSessionIfNeeded(options?: { proxyPort?: number }): Promise<{
         created: boolean,
         proxyPort: number,
         sessionUrl: string
@@ -161,10 +161,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
     app.post('/automation/android-adb/start-headless', asyncHandler(async (req: Request, res: Response) => {
         const result = await automationService.startHeadless({
             deviceId: typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined,
+            proxyPort: typeof req.body?.proxyPort === 'number' ? req.body.proxyPort : undefined,
             allowUnsafeStart: req.body?.allowUnsafeStart === true,
             enableSocks: req.body?.enableSocks === true,
-            waitForTraffic: req.body?.waitForTraffic === true,
-            waitForTargetTraffic: req.body?.waitForTargetTraffic === true
+            waitForTraffic: typeof req.body?.waitForTraffic === 'boolean' ? req.body.waitForTraffic : undefined,
+            waitForTargetTraffic: typeof req.body?.waitForTargetTraffic === 'boolean' ? req.body.waitForTargetTraffic : undefined
         });
 
         const statusCode = result.success ? 200 : 409;

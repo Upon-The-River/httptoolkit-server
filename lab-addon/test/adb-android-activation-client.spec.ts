@@ -45,8 +45,31 @@ describe('AdbAndroidActivationClient', () => {
         });
 
         assert.equal(result.success, true);
+        assert.equal((result.details as any).activationMode, 'official-bridge');
         assert.equal(fetchCalls[0], 'http://127.0.0.1:45458/automation/android-adb/start-headless');
         assert.equal(fakeAdb.shellCalls.length, 0);
+    });
+
+    it('treats bridge success=false when controlPlaneSuccess is false', async () => {
+        const fakeAdb = new FakeAdbExecutor(['device-1'], () => '');
+        const fakeFetch: typeof fetch = (async () => new Response(JSON.stringify({
+            success: true,
+            controlPlaneSuccess: false
+        }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+        })) as typeof fetch;
+        const client = new AdbAndroidActivationClient(fakeAdb, fakeFetch);
+
+        const result = await client.activateDeviceCapture({
+            deviceId: 'device-1',
+            proxyPort: 8000,
+            enableSocks: false
+        });
+
+        assert.equal(result.success, false);
+        assert.equal((result.details as any).activationMode, 'partial');
+        assert.equal(result.errors?.includes('official-bridge-failed'), true);
     });
 
     it('official bridge 404 falls back to partial adb intent mode', async () => {
@@ -121,7 +144,7 @@ describe('AdbAndroidActivationClient', () => {
         const fetchCalls: string[] = [];
         const fakeFetch: typeof fetch = (async (url: string | URL | Request) => {
             fetchCalls.push(String(url));
-            return new Response(JSON.stringify({ success: true }), {
+            return new Response(JSON.stringify({ success: true, controlPlaneSuccess: true }), {
                 status: 200,
                 headers: { 'content-type': 'application/json' }
             });
