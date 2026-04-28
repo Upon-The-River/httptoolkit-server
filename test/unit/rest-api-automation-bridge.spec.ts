@@ -176,7 +176,7 @@ describe('Android activation bridge server', () => {
             prepareProxySession: async () => ({
                 success: false,
                 proxyPort: 8000,
-                source: 'mockttp-admin-start',
+                source: 'mockttp-remote-start',
                 configAvailable: false,
                 certificateAvailable: false,
                 errors: ['proxy-config-unavailable'],
@@ -276,7 +276,7 @@ describe('Android activation bridge server', () => {
             prepareProxySession: async () => ({
                 success: true,
                 proxyPort: 9000,
-                source: 'mockttp-admin-start',
+                source: 'mockttp-remote-start',
                 configAvailable: true,
                 certificateAvailable: true,
                 certificateContent: 'cert-data',

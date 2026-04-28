@@ -7,7 +7,7 @@ const DEFAULT_ORIGIN = 'https://app.httptoolkit.tech';
 
 export type AndroidProxySessionSource =
     | 'existing-config'
-    | 'mockttp-admin-start'
+    | 'mockttp-remote-start'
     | 'unavailable';
 
 export interface AndroidProxySessionResult {
@@ -27,12 +27,10 @@ export async function prepareAndroidProxySession(options: {
     proxyPort: number;
     adminBaseUrl?: string;
     origin?: string;
-    fetchImpl?: typeof fetch;
     createRemoteSession?: (proxyPort: number, mode: 'start' | 'existing') => Promise<Pick<Mockttp, 'forGet' | 'forAnyRequest'> | undefined>;
 }): Promise<AndroidProxySessionResult> {
     const adminBaseUrl = options.adminBaseUrl ?? DEFAULT_ADMIN_BASE_URL;
     const origin = options.origin ?? DEFAULT_ORIGIN;
-    const fetchImpl = options.fetchImpl ?? fetch;
     const createRemoteSession = options.createRemoteSession ?? createDefaultRemoteSession(adminBaseUrl, origin);
 
     try {
@@ -79,24 +77,15 @@ export async function prepareAndroidProxySession(options: {
             };
         }
 
-        const startUrl = new URL('/start', adminBaseUrl);
-        startUrl.searchParams.set('port', String(options.proxyPort));
-
-        const startResponse = await fetchImpl(startUrl.toString(), {
-            method: 'POST',
-            headers: {
-                Origin: origin
-            }
-        });
-
-        if (!startResponse.ok) {
+        const session = await createRemoteSession(options.proxyPort, 'start');
+        if (!session) {
             return {
                 success: false,
                 proxyPort: options.proxyPort,
-                source: 'mockttp-admin-start',
+                source: 'mockttp-remote-start',
                 configAvailable: false,
                 certificateAvailable: false,
-                errors: [`mockttp-admin-start-failed:${startResponse.status}`],
+                errors: ['proxy-rule-session-unavailable'],
                 warnings: []
             };
         }
@@ -120,7 +109,7 @@ export async function prepareAndroidProxySession(options: {
             return {
                 success: false,
                 proxyPort: options.proxyPort,
-                source: 'mockttp-admin-start',
+                source: 'mockttp-remote-start',
                 configAvailable: true,
                 certificateAvailable: false,
                 errors: ['proxy-certificate-unavailable'],
@@ -128,24 +117,10 @@ export async function prepareAndroidProxySession(options: {
             };
         }
 
-        const session = await createRemoteSession(options.proxyPort, 'start');
-        if (!session) {
-            return {
-                success: false,
-                proxyPort: options.proxyPort,
-                source: 'mockttp-admin-start',
-                configAvailable: true,
-                certificateAvailable: true,
-                certificateContent: startedCertificate,
-                errors: ['proxy-rule-session-unavailable'],
-                warnings: []
-            };
-        }
-
         return {
             success: true,
             proxyPort: options.proxyPort,
-            source: 'mockttp-admin-start',
+            source: 'mockttp-remote-start',
             configAvailable: true,
             certificateAvailable: true,
             certificateContent: startedCertificate,

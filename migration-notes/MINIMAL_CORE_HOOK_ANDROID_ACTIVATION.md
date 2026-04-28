@@ -189,8 +189,10 @@ Issue observed in the April 27 package:
 Lifecycle fix applied:
 
 1. Bridge now prepares proxy readiness and rule session in one step (`prepareAndroidProxySession`).
-2. Start path calls admin `POST /start` once (trusted Origin), then calls remote `start(proxyPort)` once for the single rule session handle.
-3. Existing-config path does not call admin start; if a safe rule-session handle is unavailable, bridge returns `existing-config-without-rule-session-handle` and stops.
-4. Bootstrap rules are applied to the exact session returned by preparation.
+2. Start path uses one coherent lifecycle: `getRemote(...).start(proxyPort)` exactly once, then verifies `apiModel.getConfig(proxyPort)` and certificate availability.
+3. Existing-config path does not call start; if a safe rule-session handle is unavailable, bridge returns `existing-config-without-rule-session-handle` and stops.
+4. Bootstrap rules are applied to the exact session returned by preparation (no separate fallback session in the successful bridge path).
 5. Bridge no longer stops the session in `start-headless`; proxy stays alive for Android app bootstrap and validation.
 6. `controlPlaneSuccess=true` only when session prep succeeded, certificate was available, bootstrap rules were applied, and `activateInterceptor('android-adb', ...)` succeeded.
+
+Raw admin `POST /start` remains documented as an experimental check, but it is not used in the successful bridge session path unless a future design can safely return the exact same rule-session handle without a second start.
