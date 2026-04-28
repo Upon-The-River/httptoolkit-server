@@ -106,6 +106,28 @@ describe('export ingest service', () => {
         assert.equal(records[1].recordId, 'record-2');
     });
 
+    it('export-file-sink readRecordsSinceOffset tolerates malformed trailing JSONL line', async () => {
+        const runtimeRoot = await createTempRuntimeRoot();
+        const sink = new ExportFileSink({ runtimeRoot });
+
+        sink.append({
+            schemaVersion: 1,
+            recordId: 'record-1',
+            observedAt: '2026-01-01T00:00:00.000Z',
+            method: 'GET',
+            url: 'https://example.com/a',
+            statusCode: 200,
+            contentType: 'application/json',
+            body: { inline: '{}', encoding: 'utf8' }
+        });
+
+        await fs.appendFile(sink.paths.jsonlPath, '{"broken":', 'utf8');
+
+        const records = sink.readRecordsSinceOffset(0);
+        assert.equal(records.length, 1);
+        assert.equal(records[0].recordId, 'record-1');
+    });
+
     it('export-file-sink creates missing runtime/export directories', async () => {
         const runtimeRoot = await createTempRuntimeRoot();
         const paths = resolveExportRuntimePaths({ runtimeRoot });

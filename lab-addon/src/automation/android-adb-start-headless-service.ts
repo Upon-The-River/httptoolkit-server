@@ -57,7 +57,7 @@ export interface AndroidAdbStartHeadlessServiceOptions {
     sessionManager?: SessionManagerLike;
     activationClient: AndroidActivationClient;
     healthStore: AutomationHealthStore;
-    exportFileSink?: Pick<ExportFileSink, 'getOutputStatus' | 'readRecordsForTests' | 'readRecordsSinceOffsetForTests'>;
+    exportFileSink?: Pick<ExportFileSink, 'getOutputStatus' | 'readRecordsForTests' | 'readRecordsSinceOffset'>;
     matchTargetTraffic?: (url: string) => boolean;
 }
 
@@ -66,7 +66,7 @@ export class AndroidAdbStartHeadlessService {
     private readonly sessionManager: SessionManagerLike;
     private readonly activationClient: AndroidActivationClient;
     private readonly healthStore: AutomationHealthStore;
-    private readonly exportFileSink: Pick<ExportFileSink, 'getOutputStatus' | 'readRecordsForTests' | 'readRecordsSinceOffsetForTests'>;
+    private readonly exportFileSink: Pick<ExportFileSink, 'getOutputStatus' | 'readRecordsForTests' | 'readRecordsSinceOffset'>;
     private readonly matchTargetTraffic: (url: string) => boolean;
 
     constructor(options: AndroidAdbStartHeadlessServiceOptions) {
@@ -148,18 +148,21 @@ export class AndroidAdbStartHeadlessService {
 
         let jsonlGrowthObserved = false;
         let qidianTrafficObserved = false;
+        const outputWindowSatisfied = () =>
+            (!shouldWaitForTraffic || jsonlGrowthObserved) &&
+            (!shouldWaitForTargetTraffic || qidianTrafficObserved);
         const evaluateOutputWindow = () => {
             const outputStatus = this.exportFileSink.getOutputStatus();
             jsonlGrowthObserved = jsonlGrowthObserved || outputStatus.sizeBytes > beforeOutputSize;
-            const newRecords = this.exportFileSink.readRecordsSinceOffsetForTests(beforeOutputSize);
+            const newRecords = this.exportFileSink.readRecordsSinceOffset(beforeOutputSize);
             qidianTrafficObserved = qidianTrafficObserved || newRecords
                 .some((record) => typeof record.url === 'string' && this.matchTargetTraffic(record.url));
         };
 
         evaluateOutputWindow();
-        if (shouldPollOutputWindow && (!jsonlGrowthObserved || !qidianTrafficObserved)) {
+        if (shouldPollOutputWindow && !outputWindowSatisfied()) {
             const deadline = Date.now() + TRAFFIC_WAIT_TIMEOUT_MS;
-            while (Date.now() < deadline && (!jsonlGrowthObserved || !qidianTrafficObserved)) {
+            while (Date.now() < deadline && !outputWindowSatisfied()) {
                 await sleep(TRAFFIC_WAIT_POLL_MS);
                 evaluateOutputWindow();
             }

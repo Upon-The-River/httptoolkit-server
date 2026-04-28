@@ -75,7 +75,7 @@ const makeService = (options: {
     const fileSink = {
         getOutputStatus: () => ({ exists: true, sizeBytes: outputSizes[Math.min(statusCalls++, outputSizes.length - 1)], exportDir: '', targetConfigPath: '', jsonlPath: '' }),
         readRecordsForTests: () => buildRecords(options.urls ?? []),
-        readRecordsSinceOffsetForTests: () => buildRecords(newUrlsTimeline[Math.min(readCalls++, newUrlsTimeline.length - 1)])
+        readRecordsSinceOffset: () => buildRecords(newUrlsTimeline[Math.min(readCalls++, newUrlsTimeline.length - 1)])
     };
 
     return new AndroidAdbStartHeadlessService({
@@ -313,6 +313,74 @@ describe('AndroidAdbStartHeadlessService', () => {
 
         const result = await service.startHeadless({ deviceId: 'device-1', waitForTraffic: true, waitForTargetTraffic: false });
         assert.equal(result.dataPlaneObserved, true);
+        assert.equal(result.trafficValidated, true);
+    });
+
+    it('waitForTraffic-only polling exits once jsonl growth is observed without target traffic', async () => {
+        const service = makeService({
+            activationClient: {
+                activateDeviceCapture: async () => ({
+                    success: true,
+                    details: { bridgeResponse: { success: true, controlPlaneSuccess: true, proxyPort: 8000 } }
+                }),
+                stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+                recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+            },
+            outputSizes: [100, 140, 140],
+            newUrlsTimeline: [[], []]
+        });
+
+        const startedAt = Date.now();
+        const result = await service.startHeadless({ deviceId: 'device-1', waitForTraffic: true, waitForTargetTraffic: false });
+        const elapsedMs = Date.now() - startedAt;
+
+        assert.equal(result.dataPlaneObserved, true);
+        assert.equal(result.targetTrafficObserved, false);
+        assert.equal(result.trafficValidated, true);
+        assert.equal(elapsedMs < 2_500, true);
+    });
+
+    it('waitForTargetTraffic-only polling exits once qidian traffic is observed without jsonl growth', async () => {
+        const service = makeService({
+            activationClient: {
+                activateDeviceCapture: async () => ({
+                    success: true,
+                    details: { bridgeResponse: { success: true, controlPlaneSuccess: true, proxyPort: 8000 } }
+                }),
+                stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+                recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+            },
+            outputSizes: [100, 100, 100],
+            newUrlsTimeline: [[], ['https://druidv6.if.qidian.com/argus/api/v3/bookdetail/get']]
+        });
+
+        const startedAt = Date.now();
+        const result = await service.startHeadless({ deviceId: 'device-1', waitForTraffic: false, waitForTargetTraffic: true });
+        const elapsedMs = Date.now() - startedAt;
+
+        assert.equal(result.dataPlaneObserved, false);
+        assert.equal(result.targetTrafficObserved, true);
+        assert.equal(result.trafficValidated, true);
+        assert.equal(elapsedMs < 2_500, true);
+    });
+
+    it('waitForTraffic+waitForTargetTraffic polling requires both signals', async () => {
+        const service = makeService({
+            activationClient: {
+                activateDeviceCapture: async () => ({
+                    success: true,
+                    details: { bridgeResponse: { success: true, controlPlaneSuccess: true, proxyPort: 8000 } }
+                }),
+                stopDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] }),
+                recoverDeviceCapture: async () => ({ success: false, implemented: false, safeStub: true, details: {}, errors: [] })
+            },
+            outputSizes: [100, 140, 140],
+            newUrlsTimeline: [[], ['https://druidv6.if.qidian.com/argus/api/v3/bookdetail/get']]
+        });
+
+        const result = await service.startHeadless({ deviceId: 'device-1', waitForTraffic: true, waitForTargetTraffic: true });
+        assert.equal(result.dataPlaneObserved, true);
+        assert.equal(result.targetTrafficObserved, true);
         assert.equal(result.trafficValidated, true);
     });
 
