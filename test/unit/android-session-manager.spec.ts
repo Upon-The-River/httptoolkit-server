@@ -4,9 +4,9 @@ import { expect } from 'chai';
 import { prepareAndroidProxySession } from '../../src/automation/android-session-manager';
 
 describe('prepareAndroidProxySession', () => {
-    it('reuses existing config with certificate and does not call admin start', async () => {
-        let fetchCalled = false;
+    it('reuses existing config with certificate and does not call start mode', async () => {
         let getConfigCalls = 0;
+        const modes: string[] = [];
 
         const sharedSession = {
             forGet: () => ({ thenJson: async () => undefined, thenReply: async () => undefined }),
@@ -21,11 +21,10 @@ describe('prepareAndroidProxySession', () => {
                 }
             } as any,
             proxyPort: 8000,
-            fetchImpl: async () => {
-                fetchCalled = true;
-                throw new Error('should not be called');
-            },
-            createRemoteSession: async (_proxyPort, mode) => mode === 'existing' ? sharedSession : undefined
+            createRemoteSession: async (_proxyPort, mode) => {
+                modes.push(mode);
+                return mode === 'existing' ? sharedSession : undefined;
+            }
         });
 
         expect(result.success).to.equal(true);
@@ -34,7 +33,7 @@ describe('prepareAndroidProxySession', () => {
         expect(result.certificateContent).to.equal('cert-data');
         expect(result.session).to.equal(sharedSession);
         expect(getConfigCalls).to.equal(1);
-        expect(fetchCalled).to.equal(false);
+        expect(modes).to.deep.equal(['existing']);
     });
 
     it('returns structured failure for existing config without a safe rule session handle', async () => {
@@ -51,10 +50,9 @@ describe('prepareAndroidProxySession', () => {
         expect(result.errors).to.deep.equal(['existing-config-without-rule-session-handle']);
     });
 
-    it('calls admin start with POST + Origin and starts a remote session exactly once', async () => {
-        const calls: Array<{ url: string, method?: string, origin?: string | null }> = [];
+    it('starts remote session exactly once and checks config after start', async () => {
         let getConfigCalls = 0;
-        let sessionStartMode: string | undefined;
+        const modes: string[] = [];
 
         const sharedSession = {
             forGet: () => ({ thenJson: async () => undefined, thenReply: async () => undefined }),
@@ -71,42 +69,29 @@ describe('prepareAndroidProxySession', () => {
                 }
             } as any,
             proxyPort: 8000,
-            adminBaseUrl: 'http://127.0.0.1:45456',
-            origin: 'https://app.httptoolkit.tech',
-            fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
-                const url = typeof input === 'string' ? input : input.toString();
-                const originHeader = (init?.headers as Record<string, string> | undefined)?.Origin ?? null;
-                calls.push({ url, method: init?.method, origin: originHeader });
-
-                return {
-                    ok: true,
-                    status: 200
-                } as Response;
-            },
             createRemoteSession: async (_proxyPort, mode) => {
-                sessionStartMode = mode;
-                return sharedSession;
+                modes.push(mode);
+                return mode === 'start' ? sharedSession : undefined;
             }
         });
 
         expect(result.success).to.equal(true);
-        expect(result.source).to.equal('mockttp-admin-start');
+        expect(result.source).to.equal('mockttp-remote-start');
         expect(result.session).to.equal(sharedSession);
-        expect(sessionStartMode).to.equal('start');
         expect(getConfigCalls).to.equal(2);
-        expect(calls).to.have.length(1);
-        expect(calls[0].method).to.equal('POST');
-        expect(calls[0].url).to.equal('http://127.0.0.1:45456/start?port=8000');
-        expect(calls[0].origin).to.equal('https://app.httptoolkit.tech');
+        expect(modes).to.deep.equal(['start']);
     });
 
-    it('fails when admin start returns 200 but config remains unavailable', async () => {
+    it('fails when config remains unavailable after remote start', async () => {
         const result = await prepareAndroidProxySession({
             apiModel: {
                 getConfig: async () => undefined
             } as any,
             proxyPort: 8000,
-            fetchImpl: async () => ({ ok: true, status: 200 } as Response)
+            createRemoteSession: async () => ({
+                forGet: () => ({ thenJson: async () => undefined, thenReply: async () => undefined }),
+                forAnyRequest: () => ({ thenPassThrough: async () => undefined })
+            } as any)
         });
 
         expect(result.success).to.equal(false);
@@ -114,39 +99,41 @@ describe('prepareAndroidProxySession', () => {
         expect(result.errors).to.deep.equal(['proxy-config-unavailable']);
     });
 
-    it('fails when config exists but certificate is missing', async () => {
+    it('fails when config exists but certificate is missing after remote start', async () => {
+        let getConfigCalls = 0;
         const result = await prepareAndroidProxySession({
             apiModel: {
-                getConfig: async () => ({ certificateContent: '' })
+                getConfig: async () => {
+                    getConfigCalls += 1;
+                    return getConfigCalls === 1 ? undefined : { certificateContent: '' };
+                }
             } as any,
             proxyPort: 8000,
-            fetchImpl: async () => ({ ok: true, status: 200 } as Response)
+            createRemoteSession: async () => ({
+                forGet: () => ({ thenJson: async () => undefined, thenReply: async () => undefined }),
+                forAnyRequest: () => ({ thenPassThrough: async () => undefined })
+            } as any)
         });
 
         expect(result.success).to.equal(false);
+        expect(result.source).to.equal('mockttp-remote-start');
         expect(result.configAvailable).to.equal(true);
         expect(result.certificateAvailable).to.equal(false);
         expect(result.errors).to.deep.equal(['proxy-certificate-unavailable']);
     });
 
-    it('does not call GET /start and does not omit Origin header', async () => {
-        const calls: Array<{ method?: string, origin?: string | null }> = [];
-
-        await prepareAndroidProxySession({
+    it('returns structured failure when start cannot provide a rule session handle', async () => {
+        const result = await prepareAndroidProxySession({
             apiModel: {
                 getConfig: async () => undefined
             } as any,
             proxyPort: 8001,
-            fetchImpl: async (_input: RequestInfo | URL, init?: RequestInit) => {
-                const originHeader = (init?.headers as Record<string, string> | undefined)?.Origin ?? null;
-                calls.push({ method: init?.method, origin: originHeader });
-                return { ok: false, status: 403 } as Response;
-            }
+            createRemoteSession: async () => undefined
         });
 
-        expect(calls).to.have.length(1);
-        expect(calls[0].method).to.equal('POST');
-        expect(calls[0].origin).to.equal('https://app.httptoolkit.tech');
+        expect(result.success).to.equal(false);
+        expect(result.source).to.equal('mockttp-remote-start');
+        expect(result.errors).to.deep.equal(['proxy-rule-session-unavailable']);
     });
 
     it('returns structured errors instead of throwing', async () => {
