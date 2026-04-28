@@ -59,6 +59,9 @@ export const resolveSessionHttpProxyPort = (
     payload: { http?: SessionHttpPlugin } | undefined
 ): number | undefined => getSessionHttpMockServer(payload?.http)?.port;
 
+export const updateActiveSessionCount = (current: number, delta: 1 | -1): number =>
+    Math.max(current + delta, 0);
+
 async function generateHTTPSConfig(configPath: string) {
     const keyPath = path.join(configPath, 'ca.key');
     const certPath = path.join(configPath, 'ca.pem');
@@ -115,52 +118,7 @@ function manageBackgroundServices(
 ) {
     let activeSessions = 0;
 
-    standalone.on('mock-session-started', async (sessionData, sessionId) => {
-        activeSessions += 1;
-        if (shutdownTimer) {
-            clearTimeout(shutdownTimer);
-            shutdownTimer = undefined;
-        }
-
-        const httpMockServer = getSessionHttpMockServer(sessionData?.http as SessionHttpPlugin | undefined);
-        if (!httpMockServer) {
-            console.warn(`Mock session ${sessionId} started without a supported HTTP session; skipping session setup`);
-            return;
-        }
-
-        const httpProxyPort = httpMockServer.port;
-        const webrtcEnabled = !!sessionData?.webrtc;
-
-        console.log(`Mock session started, http on port ${
-            httpProxyPort
-        }, webrtc ${
-            webrtcEnabled ? 'enabled' : 'disabled'
-        }`);
-
-        startDockerInterceptionServices(httpProxyPort, httpsConfig, ruleParameters)
-        .catch((error) => {
-            console.log("Could not start Docker components:", error);
-        });
-
-        updateWebExtensionConfig(sessionId, httpProxyPort, webrtcEnabled)
-        .catch((error) => {
-            console.log("Could not update WebRTC config:", error);
-        });
-
-        setupLiveExportHook(liveExportAddonBridge, httpMockServer);
-    });
-
-    standalone.on('mock-session-stopping', ({ http }) => {
-        activeSessions -= 1;
-        const httpProxyPort = http.getMockServer().port;
-
-        stopDockerInterceptionServices(httpProxyPort, ruleParameters)
-        .catch((error) => {
-            console.log("Could not stop Docker components:", error);
-        });
-
-        clearWebExtensionConfig(httpProxyPort);
-
+    const maybeScheduleShutdown = () => {
         // In some odd cases, the server can end up running even though all UIs & desktop have exited
         // completely. This can be problematic, as it leaves the server holding ports that HTTP Toolkit
         // needs, and blocks future startups. To avoid this, if no Mock sessions are running at all
@@ -185,6 +143,74 @@ function manageBackgroundServices(
                     shutdown(99, '10 minutes inactive');
                 }, 1000 * 60 * 9).unref();
             }, 1000 * 60 * 1).unref();
+        }
+    };
+
+    standalone.on('mock-session-started', async (sessionData, sessionId) => {
+        activeSessions = updateActiveSessionCount(activeSessions, 1);
+        if (shutdownTimer) {
+            clearTimeout(shutdownTimer);
+            shutdownTimer = undefined;
+        }
+
+        try {
+            const httpMockServer = getSessionHttpMockServer(sessionData?.http as SessionHttpPlugin | undefined);
+            if (!httpMockServer) {
+                console.warn(`Mock session ${sessionId} started without a supported HTTP session; skipping session setup`);
+                return;
+            }
+
+            const httpProxyPort = httpMockServer.port;
+            const webrtcEnabled = !!sessionData?.webrtc;
+
+            console.log(`Mock session started, http on port ${
+                httpProxyPort
+            }, webrtc ${
+                webrtcEnabled ? 'enabled' : 'disabled'
+            }`);
+
+            startDockerInterceptionServices(httpProxyPort, httpsConfig, ruleParameters)
+            .catch((error) => {
+                console.log("Could not start Docker components:", error);
+            });
+
+            updateWebExtensionConfig(sessionId, httpProxyPort, webrtcEnabled)
+            .catch((error) => {
+                console.log("Could not update WebRTC config:", error);
+            });
+
+            setupLiveExportHook(liveExportAddonBridge, httpMockServer);
+        } catch (error) {
+            console.warn(`Mock session ${sessionId} started with unsupported setup payload; skipping session setup`, error);
+        }
+    });
+
+    standalone.on('mock-session-stopping', (sessionData, sessionId) => {
+        activeSessions = updateActiveSessionCount(activeSessions, -1);
+
+        try {
+            const httpMockServer = getSessionHttpMockServer(sessionData?.http as SessionHttpPlugin | undefined);
+            if (!httpMockServer) {
+                console.warn(`Mock session ${sessionId} stopping without a supported HTTP session; skipping dependent cleanup`);
+                return;
+            }
+
+            const httpProxyPort = httpMockServer.port;
+
+            stopDockerInterceptionServices(httpProxyPort, ruleParameters)
+            .catch((error) => {
+                console.log("Could not stop Docker components:", error);
+            });
+
+            try {
+                clearWebExtensionConfig(httpProxyPort);
+            } catch (error) {
+                console.log("Could not clear WebExtension config:", error);
+            }
+        } catch (error) {
+            console.warn(`Mock session ${sessionId} stopping with unsupported cleanup payload; skipping dependent cleanup`, error);
+        } finally {
+            maybeScheduleShutdown();
         }
     });
 }

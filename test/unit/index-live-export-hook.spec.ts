@@ -1,6 +1,6 @@
 import { expect } from 'chai';
 
-import { resolveSessionHttpProxyPort } from '../../src/index';
+import { resolveSessionHttpProxyPort, updateActiveSessionCount } from '../../src/index';
 
 describe('index live export hook session guards', () => {
     it('mock-session-started with missing http does not throw', () => {
@@ -21,5 +21,24 @@ describe('index live export hook session guards', () => {
         } as any);
 
         expect(port).to.equal(8000);
+    });
+
+    it('mock-session-stopping with unsupported http does not throw', () => {
+        expect(() => resolveSessionHttpProxyPort({
+            http: {
+                getMockServer: () => ({})
+            }
+        } as any)).not.to.throw();
+        expect(resolveSessionHttpProxyPort({
+            http: {
+                getMockServer: () => ({})
+            }
+        } as any)).to.equal(undefined);
+    });
+
+    it('activeSessions accounting is clamped and cannot go negative', () => {
+        expect(updateActiveSessionCount(0, -1)).to.equal(0);
+        expect(updateActiveSessionCount(1, -1)).to.equal(0);
+        expect(updateActiveSessionCount(0, 1)).to.equal(1);
     });
 });
