@@ -1154,4 +1154,25 @@ describe('lab addon service endpoints', () => {
         assert.equal(body.ok, false);
         assert.equal(body.status, 'requires-core-hook');
     });
+    it('ExportFileSink.readRecordsSinceOffset tolerates partial trailing JSONL lines', async () => {
+        const runtimeRoot = await createTempRuntimeRoot();
+        const sink = new ExportFileSink({ runtimeRoot });
+
+        sink.append({
+            schemaVersion: 1,
+            recordId: '1',
+            observedAt: new Date().toISOString(),
+            method: 'GET',
+            url: 'https://example.com/ok',
+            statusCode: 200,
+            body: { inline: '', encoding: 'utf8' }
+        });
+
+        await fs.appendFile(sink.paths.jsonlPath, '{"schemaVersion":1,"recordId":"broken"', 'utf8');
+
+        const records = sink.readRecordsSinceOffset(0);
+        assert.equal(records.length, 1);
+        assert.equal(records[0].url, 'https://example.com/ok');
+    });
+
 });

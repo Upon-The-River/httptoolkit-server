@@ -285,3 +285,29 @@ These log patterns are now classified as warnings and do not force control-plane
 - `upstream-dns-failure`
 - `upstream-socket-hangup`
 - `vpn-ipv6-packet-warning`
+
+## Addon start-headless state-machine contract (April 28, 2026)
+
+The addon wrapper now uses an explicit start-headless attempt model and success matrix to avoid semantic regressions:
+
+- `attemptId`, `requestedProxyPort`, `effectiveProxyPort`
+- `controlPlaneSuccess`, `vpnLikelyActive`
+- `dataPlaneObserved`, `targetTrafficObserved`
+- `trafficValidated`, `targetValidated`, `overallSuccess`
+- `failurePhase` (`control-plane`, `traffic-wait-timeout`, `target-wait-timeout`)
+- `evidence` payload including bridge evidence + JSONL baseline/after offsets and post-baseline record flags.
+
+Contract highlights:
+
+1. **Port/session safety:** when bridge returns `controlPlaneSuccess=true`, addon does not run local `startSessionIfNeeded` and preserves bridge proxy port.
+2. **No stale JSONL evidence:** any data-plane/target evidence comes only from records read with `readRecordsSinceOffset(jsonlBaselineBytes)` where baseline is captured before activation.
+3. **Polling scope:** addon polls JSONL evidence only when `waitForTraffic` and/or `waitForTargetTraffic` are set; timeout is 10s with 500ms interval.
+4. **Validation formula:** `overallSuccess = controlPlaneSuccess && trafficValidated && targetValidated`.
+5. **VPN evidence role:** VPN evidence is supporting only; it does not satisfy traffic or target validation waits by itself.
+6. **Health durability:**
+   - `lastStartHeadless`: latest attempt.
+   - `lastSuccessfulStartHeadless`: latest `overallSuccess=true`.
+   - `lastControlPlaneSuccessfulStartHeadless`: latest `controlPlaneSuccess=true`.
+   - `lastFailure`: latest failed attempt.
+
+This keeps evidence of successful core activation even if a later target wait times out.

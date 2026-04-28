@@ -37,23 +37,46 @@ export interface StartHeadlessRequest {
     waitForTargetTraffic?: boolean;
 }
 
+export type StartHeadlessFailurePhase = 'control-plane' | 'traffic-wait-timeout' | 'target-wait-timeout';
+
+export interface StartHeadlessEvidence {
+    bridgeControlPlaneSuccess: boolean;
+    bridgeProxyPort?: number;
+    proxyVpnRunnableSeen: boolean;
+    activityMentionsHttpToolkit: boolean;
+    dumpsysVpnAvailable: boolean;
+    dumpsysVpnMentionsHttpToolkit: boolean;
+    activeNetworkMentionsVpn: boolean;
+    jsonlBaselineBytes: number;
+    jsonlAfterBytes: number;
+    jsonlGrowthObserved: boolean;
+    newRecordsObserved: boolean;
+    newTargetRecordsObserved: boolean;
+}
+
 export interface StartHeadlessResponse {
     success: boolean;
+    overallSuccess: boolean;
+    attemptId: string;
     deviceId?: string;
+    requestedProxyPort: number;
+    effectiveProxyPort: number;
     proxyPort: number;
+    controlPlaneSuccess: boolean;
+    vpnLikelyActive: boolean;
+    dataPlaneObserved: boolean;
+    targetTrafficObserved: boolean;
+    trafficValidated: boolean;
+    targetValidated: boolean;
+    failurePhase?: StartHeadlessFailurePhase;
+    evidence: StartHeadlessEvidence;
     session: {
         active: boolean;
         source: 'addon';
         details: Record<string, unknown>;
     };
-    controlPlaneSuccess: boolean;
-    dataPlaneObserved: boolean;
-    targetTrafficObserved: boolean;
-    trafficValidated: boolean;
     activationResult: unknown;
     warnings?: Array<unknown>;
-    vpnEvidence?: Record<string, unknown>;
-    vpnLikelyActive?: boolean;
     health: unknown;
     errors: Array<unknown>;
 }

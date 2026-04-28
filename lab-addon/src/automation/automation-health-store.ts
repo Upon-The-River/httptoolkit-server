@@ -4,6 +4,7 @@ export interface AutomationHealthSnapshot {
     lastDeviceId?: string;
     lastStartHeadless?: unknown;
     lastSuccessfulStartHeadless?: unknown;
+    lastControlPlaneSuccessfulStartHeadless?: unknown;
     lastStopHeadless?: unknown;
     lastRecoverHeadless?: unknown;
     lastFailure?: unknown;
