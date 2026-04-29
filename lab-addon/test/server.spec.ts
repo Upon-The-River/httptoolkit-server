@@ -672,6 +672,22 @@ describe('lab addon service endpoints', () => {
         assert.equal(body.health.activationMode, 'adb-activation');
     });
 
+    it('POST /automation/android-adb/wait-for-target-traffic returns structured timeout', async () => {
+        const { baseUrl } = await startTestServer(createApp({
+            androidNetworkSafety: baseAndroidSafety,
+            sessionManager: automationSessionManager
+        }));
+        const response = await fetch(`${baseUrl}/automation/android-adb/wait-for-target-traffic`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ baselineBytes: 99999, timeoutMs: 5, pollIntervalMs: 1 })
+        });
+        assert.equal(response.status, 409);
+        const body = await response.json();
+        assert.equal(body.success, false);
+        assert.equal(typeof body.trafficValidated, 'boolean');
+    });
+
     it('stop-headless returns safe-stub or fake stop response', async () => {
         const activationClient: AndroidActivationClient = {
             activateDeviceCapture: async () => ({ success: true, details: {} }),

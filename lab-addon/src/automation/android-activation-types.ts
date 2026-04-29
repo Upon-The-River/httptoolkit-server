@@ -36,6 +36,30 @@ export interface StartHeadlessRequest {
     waitForTraffic?: boolean;
     waitForTargetTraffic?: boolean;
 }
+export interface WaitForTargetTrafficRequest {
+    baselineBytes?: number;
+    waitForTraffic?: boolean;
+    waitForTargetTraffic?: boolean;
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+    maxSampleTargetUrls?: number;
+}
+
+export interface WaitForTargetTrafficResponse {
+    success: boolean;
+    baselineBytes: number;
+    afterBytes: number;
+    dataPlaneObserved: boolean;
+    targetTrafficObserved: boolean;
+    trafficValidated: boolean;
+    targetValidated: boolean;
+    failurePhase?: StartHeadlessFailurePhase;
+    newRecordCount: number;
+    newTargetRecordCount: number;
+    sampleTargetUrls: string[];
+    timeoutMs: number;
+    pollIntervalMs: number;
+}
 
 export type StartHeadlessFailurePhase = 'control-plane' | 'traffic-wait-timeout' | 'target-wait-timeout';
 

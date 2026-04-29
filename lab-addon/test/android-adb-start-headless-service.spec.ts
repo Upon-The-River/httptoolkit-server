@@ -330,4 +330,35 @@ describe('AndroidAdbStartHeadlessService matrix', () => {
         assert.equal(result.effectiveProxyPort, 8000);
         assert.equal(getStartCalls(), 0);
     });
+
+    it('waitForTargetTraffic: observes only post-baseline target traffic', async () => {
+        const { service } = makeService({
+            outputSizes: [100, 120],
+            recordsTimeline: [['https://druidv6.if.qidian.com/argus/api/v1/popup/getlistv3']]
+        });
+        const result = await service.waitForTargetTraffic({
+            baselineBytes: 100,
+            waitForTraffic: true,
+            waitForTargetTraffic: true,
+            timeoutMs: 10,
+            pollIntervalMs: 1
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.dataPlaneObserved, true);
+        assert.equal(result.targetTrafficObserved, true);
+        assert.equal(result.newTargetRecordCount, 1);
+    });
+
+    it('waitForTargetTraffic: times out with empty post-baseline stream', async () => {
+        const { service } = makeService({ outputSizes: [100, 100], recordsTimeline: [[], []] });
+        const result = await service.waitForTargetTraffic({
+            baselineBytes: 100,
+            waitForTraffic: true,
+            waitForTargetTraffic: true,
+            timeoutMs: 5,
+            pollIntervalMs: 1
+        });
+        assert.equal(result.success, false);
+        assert.equal(result.failurePhase, 'traffic-wait-timeout');
+    });
 });

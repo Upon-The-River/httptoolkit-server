@@ -368,3 +368,19 @@ Contract highlights:
    - `lastFailure`: latest failed attempt.
 
 This keeps evidence of successful core activation even if a later target wait times out.
+
+## 2026-04-29 post-device follow-up
+
+Verified real-device status before this patch:
+- First `start-headless` on `proxyPort=8000` succeeded end-to-end.
+- Repeated same-port `start-headless` was failing with raw `EADDRINUSE`.
+- After manual Qidian activity, JSONL grew from `0` to `174396` with real `druidv6.if.qidian.com` URLs.
+
+Final contract after this patch:
+- `POST /automation/android-adb/start-headless` is for activation/control-plane session setup.
+- `POST /automation/android-adb/wait-for-target-traffic` is for post-start JSONL observation from a caller-provided (or current) baseline offset.
+- Repeated same-port activation reuses the active session registry and returns reuse diagnostics instead of retrying with alternate ports.
+- Socket/TLS/Docker/su noise remains non-fatal warning telemetry when Qidian JSONL capture is present.
+
+Known downstream issue (not solved here):
+- Some JSONL body text may still show mojibake. This needs a later normalization/encoding pass.
