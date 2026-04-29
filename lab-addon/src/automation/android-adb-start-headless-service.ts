@@ -4,11 +4,14 @@ import { matchQidianTraffic } from '../qidian/qidian-traffic-matcher';
 import { LatestSessionState, ObservedTrafficSignal, SessionManager, TargetTrafficSignal } from '../session/session-manager';
 import { AutomationHealthStore } from './automation-health-store';
 import { AndroidActivationClient } from './android-activation-client';
-import { StartHeadlessEvidence, StartHeadlessFailurePhase, StartHeadlessRequest, StartHeadlessResponse } from './android-activation-types';
+import { StartHeadlessEvidence, StartHeadlessFailurePhase, StartHeadlessRequest, StartHeadlessResponse, WaitForTargetTrafficRequest, WaitForTargetTrafficResponse } from './android-activation-types';
 
 const DEFAULT_PROXY_PORT = 8000;
 const TRAFFIC_WAIT_TIMEOUT_MS = 10_000;
 const TRAFFIC_WAIT_POLL_MS = 500;
+const OBSERVE_TRAFFIC_WAIT_TIMEOUT_MS = 30_000;
+const OBSERVE_TRAFFIC_WAIT_POLL_MS = 500;
+const OBSERVE_SAMPLE_TARGET_URLS_MAX = 10;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -439,6 +442,55 @@ export class AndroidAdbStartHeadlessService {
             details: result.details ?? {},
             health
         };
+    }
+
+    async waitForTargetTraffic(input: WaitForTargetTrafficRequest): Promise<WaitForTargetTrafficResponse> {
+        const waitForTraffic = input.waitForTraffic ?? true;
+        const waitForTargetTraffic = input.waitForTargetTraffic ?? true;
+        const timeoutMs = typeof input.timeoutMs === 'number' ? input.timeoutMs : OBSERVE_TRAFFIC_WAIT_TIMEOUT_MS;
+        const pollIntervalMs = typeof input.pollIntervalMs === 'number' ? input.pollIntervalMs : OBSERVE_TRAFFIC_WAIT_POLL_MS;
+        const maxSampleTargetUrls = typeof input.maxSampleTargetUrls === 'number' ? input.maxSampleTargetUrls : OBSERVE_SAMPLE_TARGET_URLS_MAX;
+        const baselineBytes = typeof input.baselineBytes === 'number' ? input.baselineBytes : this.exportFileSink.getOutputStatus().sizeBytes;
+
+        const deadline = Date.now() + timeoutMs;
+        let afterBytes = baselineBytes;
+        let newRecordCount = 0;
+        let newTargetRecordCount = 0;
+        let sampleTargetUrls: string[] = [];
+
+        while (Date.now() <= deadline) {
+            const status = this.exportFileSink.getOutputStatus();
+            const records = this.exportFileSink.readRecordsSinceOffset(baselineBytes);
+            const targetUrls = records
+                .map((r) => r.url)
+                .filter((url): url is string => typeof url === 'string' && this.matchTargetTraffic(url));
+
+            afterBytes = status.sizeBytes;
+            newRecordCount = records.length;
+            newTargetRecordCount = targetUrls.length;
+            sampleTargetUrls = targetUrls.slice(0, Math.max(0, maxSampleTargetUrls));
+
+            const dataPlaneObserved = afterBytes > baselineBytes || newRecordCount > 0;
+            const targetTrafficObserved = newTargetRecordCount > 0;
+            const trafficValidated = !waitForTraffic || dataPlaneObserved;
+            const targetValidated = !waitForTargetTraffic || targetTrafficObserved;
+            const success = trafficValidated && targetValidated;
+            if (success) {
+                return { success, baselineBytes, afterBytes, dataPlaneObserved, targetTrafficObserved, trafficValidated, targetValidated, newRecordCount, newTargetRecordCount, sampleTargetUrls, timeoutMs, pollIntervalMs };
+            }
+
+            if (Date.now() + pollIntervalMs > deadline) break;
+            await sleep(pollIntervalMs);
+        }
+
+        const dataPlaneObserved = afterBytes > baselineBytes || newRecordCount > 0;
+        const targetTrafficObserved = newTargetRecordCount > 0;
+        const trafficValidated = !waitForTraffic || dataPlaneObserved;
+        const targetValidated = !waitForTargetTraffic || targetTrafficObserved;
+        const failurePhase: StartHeadlessFailurePhase | undefined = waitForTraffic && !dataPlaneObserved
+            ? 'traffic-wait-timeout'
+            : (waitForTargetTraffic && !targetTrafficObserved ? 'target-wait-timeout' : undefined);
+        return { success: false, baselineBytes, afterBytes, dataPlaneObserved, targetTrafficObserved, trafficValidated, targetValidated, failurePhase, newRecordCount, newTargetRecordCount, sampleTargetUrls, timeoutMs, pollIntervalMs };
     }
 
     async recoverHeadless(input: { deviceId?: string }): Promise<unknown> {

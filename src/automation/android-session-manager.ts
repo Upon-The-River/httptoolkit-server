@@ -23,6 +23,9 @@ export interface AndroidProxySessionResult {
     ruleSessionHandleAvailable: boolean;
     certificateContent?: string;
     session?: Pick<Mockttp, 'forGet' | 'forAnyRequest'>;
+    remoteStartAttempted?: boolean;
+    registryEntryFound?: boolean;
+    registryKeys?: number[];
     errors: string[];
     warnings: string[];
 }
@@ -69,6 +72,9 @@ export async function prepareAndroidProxySession(options: {
                     ruleSessionHandleAvailable: true,
                     certificateContent: initialCertificate,
                     session: registrySession.session,
+                    remoteStartAttempted: false,
+                    registryEntryFound: true,
+                    registryKeys: Array.from(activeSessionRegistry.keys()),
                     errors: [],
                     warnings: []
                 };
@@ -116,6 +122,9 @@ export async function prepareAndroidProxySession(options: {
                             ruleSessionHandleAvailable: true,
                             certificateContent: initialCertificate,
                             session: fallbackRegistrySession.session,
+                            remoteStartAttempted: true,
+                            registryEntryFound: true,
+                            registryKeys: Array.from(activeSessionRegistry.keys()),
                             errors: [],
                             warnings: ['mockttp-start-eaddrinuse-registry-reused']
                         };
@@ -129,6 +138,9 @@ export async function prepareAndroidProxySession(options: {
                         staleExistingConfig: true,
                         ruleSessionHandleAvailable: false,
                         certificateContent: initialCertificate,
+                        remoteStartAttempted: true,
+                        registryEntryFound: false,
+                        registryKeys: Array.from(activeSessionRegistry.keys()),
                         errors: ['proxy-port-in-use-without-session-handle'],
                         warnings: ['existing-config-without-rule-session-handle']
                     };
@@ -220,6 +232,9 @@ export async function prepareAndroidProxySession(options: {
                         ruleSessionHandleAvailable: true,
                         certificateContent: registrySession.certificateContent,
                         session: registrySession.session,
+                        remoteStartAttempted: true,
+                        registryEntryFound: true,
+                        registryKeys: Array.from(activeSessionRegistry.keys()),
                         errors: [],
                         warnings: ['mockttp-start-eaddrinuse-registry-reused']
                     };
@@ -232,6 +247,9 @@ export async function prepareAndroidProxySession(options: {
                     certificateAvailable: false,
                     staleExistingConfig: false,
                     ruleSessionHandleAvailable: false,
+                    remoteStartAttempted: true,
+                    registryEntryFound: false,
+                    registryKeys: Array.from(activeSessionRegistry.keys()),
                     errors: ['proxy-port-in-use-without-session-handle'],
                     warnings: []
                 };

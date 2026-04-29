@@ -179,6 +179,18 @@ export function createApp(options: CreateAppOptions = {}): Express {
         res.json(result);
     }));
 
+    app.post('/automation/android-adb/wait-for-target-traffic', asyncHandler(async (req: Request, res: Response) => {
+        const result = await automationService.waitForTargetTraffic({
+            baselineBytes: typeof req.body?.baselineBytes === 'number' ? req.body.baselineBytes : undefined,
+            waitForTraffic: typeof req.body?.waitForTraffic === 'boolean' ? req.body.waitForTraffic : undefined,
+            waitForTargetTraffic: typeof req.body?.waitForTargetTraffic === 'boolean' ? req.body.waitForTargetTraffic : undefined,
+            timeoutMs: typeof req.body?.timeoutMs === 'number' ? req.body.timeoutMs : undefined,
+            pollIntervalMs: typeof req.body?.pollIntervalMs === 'number' ? req.body.pollIntervalMs : undefined,
+            maxSampleTargetUrls: typeof req.body?.maxSampleTargetUrls === 'number' ? req.body.maxSampleTargetUrls : undefined
+        });
+        res.status(result.success ? 200 : 409).json(result);
+    }));
+
     app.post('/automation/android-adb/recover-headless', asyncHandler(async (req: Request, res: Response) => {
         const result = await automationService.recoverHeadless({
             deviceId: typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined
