@@ -1,9 +1,12 @@
 import * as fs from 'fs';
 import { expect } from 'chai';
 
-import { prepareAndroidProxySession } from '../../src/automation/android-session-manager';
+import { __resetAndroidSessionRegistryForTests, prepareAndroidProxySession } from '../../src/automation/android-session-manager';
 
 describe('prepareAndroidProxySession', () => {
+    beforeEach(() => {
+        __resetAndroidSessionRegistryForTests();
+    });
     it('reuses existing config with certificate and does not call start mode', async () => {
         let getConfigCalls = 0;
         const modes: string[] = [];
@@ -175,6 +178,75 @@ describe('prepareAndroidProxySession', () => {
         expect(result.session).to.equal(sharedSession);
         expect(getConfigCalls).to.equal(2);
         expect(modes).to.deep.equal(['start']);
+    });
+
+    it('reuses registry session on repeated calls with same proxyPort and config', async () => {
+        const modes: string[] = [];
+        const sharedSession = {
+            forGet: () => ({ thenJson: async () => undefined, thenReply: async () => undefined }),
+            forAnyRequest: () => ({ thenPassThrough: async () => undefined })
+        } as any;
+
+        await prepareAndroidProxySession({
+            apiModel: { getConfig: async () => ({ certificateContent: 'cert-data' }) } as any,
+            proxyPort: 8000,
+            createRemoteSession: async (_proxyPort, mode) => {
+                modes.push(mode);
+                return mode === 'start' ? sharedSession : undefined;
+            }
+        });
+
+        const secondResult = await prepareAndroidProxySession({
+            apiModel: { getConfig: async () => ({ certificateContent: 'cert-data' }) } as any,
+            proxyPort: 8000,
+            createRemoteSession: async (_proxyPort, mode) => {
+                modes.push(mode);
+                return undefined;
+            }
+        });
+
+        expect(secondResult.success).to.equal(true);
+        expect(secondResult.source).to.equal('existing-active-session-registry');
+        expect(secondResult.ruleSessionHandleAvailable).to.equal(true);
+        expect(secondResult.session).to.equal(sharedSession);
+        expect(modes).to.deep.equal(['existing', 'start']);
+    });
+
+    it('returns registry session after EADDRINUSE on stale recovery path when available', async () => {
+        const session = {
+            forGet: () => ({ thenJson: async () => undefined, thenReply: async () => undefined }),
+            forAnyRequest: () => ({ thenPassThrough: async () => undefined })
+        } as any;
+        await prepareAndroidProxySession({
+            apiModel: { getConfig: async () => ({ certificateContent: 'cert-data' }) } as any,
+            proxyPort: 8000,
+            createRemoteSession: async (_proxyPort, mode) => mode === 'start' ? session : undefined
+        });
+
+        const result = await prepareAndroidProxySession({
+            apiModel: { getConfig: async () => ({ certificateContent: 'cert-data' }) } as any,
+            proxyPort: 8001,
+            createRemoteSession: async (_proxyPort, mode) => mode === 'start'
+                ? Promise.reject(new Error('listen EADDRINUSE: address already in use :::8001'))
+                : undefined
+        });
+
+        expect(result.success).to.equal(false);
+        expect(result.errors).to.deep.equal(['proxy-port-in-use-without-session-handle']);
+    });
+
+    it('returns structured failure on EADDRINUSE without registry handle', async () => {
+        const result = await prepareAndroidProxySession({
+            apiModel: { getConfig: async () => undefined } as any,
+            proxyPort: 8002,
+            createRemoteSession: async () => {
+                throw new Error('listen EADDRINUSE: address already in use :::8002');
+            }
+        });
+
+        expect(result.success).to.equal(false);
+        expect(result.ruleSessionHandleAvailable).to.equal(false);
+        expect(result.errors).to.deep.equal(['proxy-port-in-use-without-session-handle']);
     });
 
     it('fails when config remains unavailable after remote start', async () => {

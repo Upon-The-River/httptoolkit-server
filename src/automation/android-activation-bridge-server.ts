@@ -162,6 +162,9 @@ export async function startAndroidActivationBridgeServer(options: {
                     certificateContent: proxySessionPreparation.certificateContent
                 }
             );
+            const bootstrapRulesSource = proxySessionPreparation.source.startsWith('existing-active-session-registry')
+                ? 'registry-reused'
+                : 'session-rules-applied';
 
             if (!bootstrapResult.applied) {
                 res.status(500).send({
@@ -175,6 +178,7 @@ export async function startAndroidActivationBridgeServer(options: {
                     staleExistingConfig: proxySessionPreparation.staleExistingConfig,
                     ruleSessionHandleAvailable: proxySessionPreparation.ruleSessionHandleAvailable,
                     bootstrapRulesApplied: false,
+                    bootstrapRulesSource,
                     bootstrapResult,
                     controlPlaneSuccess: false,
                     activationResult: {
@@ -213,6 +217,7 @@ export async function startAndroidActivationBridgeServer(options: {
                 staleExistingConfig: proxySessionPreparation.staleExistingConfig,
                 ruleSessionHandleAvailable: proxySessionPreparation.ruleSessionHandleAvailable,
                 bootstrapRulesApplied: bootstrapResult.applied,
+                bootstrapRulesSource,
                 bootstrapResult,
                 controlPlaneSuccess,
                 activationResult,

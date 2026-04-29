@@ -481,6 +481,62 @@ describe('Android activation bridge server', () => {
         }
     });
 
+    it('supports repeated calls on same proxyPort with registry source and no fallback port switch', async () => {
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_ENABLED = 'true';
+        process.env.HTK_ANDROID_ACTIVATION_BRIDGE_PORT = '0';
+
+        const seenPorts: number[] = [];
+        let prepareCalls = 0;
+        const bridge = await startAndroidActivationBridgeServer({
+            apiModel: {
+                getInterceptorMetadata: async () => ({ deviceIds: ['device-1'] }),
+                activateInterceptor: async (_name: string, proxyPort: number) => {
+                    seenPorts.push(proxyPort);
+                    return { success: true, metadata: {} };
+                }
+            } as any,
+            prepareProxySession: async () => {
+                prepareCalls += 1;
+                return {
+                    success: true,
+                    proxyPort: 8000,
+                    source: prepareCalls === 1 ? 'mockttp-remote-start' : 'existing-active-session-registry',
+                    configAvailable: true,
+                    certificateAvailable: true,
+                    staleExistingConfig: false,
+                    ruleSessionHandleAvailable: true,
+                    certificateContent: 'cert-data',
+                    session: {
+                        forGet: () => ({ thenJson: async () => undefined, thenReply: async () => undefined }),
+                        forAnyRequest: () => ({ thenPassThrough: async () => undefined })
+                    } as any,
+                    errors: [],
+                    warnings: []
+                };
+            }
+        });
+        const port = ((bridge!.address() as any).port);
+        try {
+            const first = await fetch(`http://127.0.0.1:${port}/automation/android-adb/start-headless`, {
+                method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: 'device-1', proxyPort: 8000 })
+            });
+            const firstBody = await first.json();
+            const second = await fetch(`http://127.0.0.1:${port}/automation/android-adb/start-headless`, {
+                method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: 'device-1', proxyPort: 8000 })
+            });
+            const secondBody = await second.json();
+
+            expect(first.status).to.equal(200);
+            expect(second.status).to.equal(200);
+            expect(secondBody.proxySessionSource).to.equal('existing-active-session-registry');
+            expect(firstBody.proxyPort).to.equal(8000);
+            expect(secondBody.proxyPort).to.equal(8000);
+            expect(seenPorts).to.deep.equal([8000, 8000]);
+        } finally {
+            await new Promise<void>((resolve, reject) => bridge!.close((err) => err ? reject(err) : resolve()));
+        }
+    });
+
     it('contains no qidian-specific logic', () => {
         const bridgeSource = fs.readFileSync('src/automation/android-activation-bridge-server.ts', 'utf8').toLowerCase();
         expect(bridgeSource).to.not.contain('qidian');
