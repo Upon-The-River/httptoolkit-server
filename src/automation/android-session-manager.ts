@@ -7,6 +7,8 @@ const DEFAULT_ORIGIN = 'https://app.httptoolkit.tech';
 
 export type AndroidProxySessionSource =
     | 'existing-config'
+    | 'existing-active-session-registry'
+    | 'existing-active-session-registry-after-eaddrinuse'
     | 'stale-existing-config-recovered-by-remote-start'
     | 'mockttp-remote-start'
     | 'unavailable';
@@ -55,8 +57,33 @@ export async function prepareAndroidProxySession(options: {
         }
 
         if (initialConfig && initialCertificate) {
+            const registrySession = getRegistryEntry(options.proxyPort, initialCertificate);
+            if (registrySession) {
+                return {
+                    success: true,
+                    proxyPort: options.proxyPort,
+                    source: 'existing-active-session-registry',
+                    configAvailable: true,
+                    certificateAvailable: true,
+                    staleExistingConfig: false,
+                    ruleSessionHandleAvailable: true,
+                    certificateContent: initialCertificate,
+                    session: registrySession.session,
+                    errors: [],
+                    warnings: []
+                };
+            }
+
             const existingSession = await createRemoteSession(options.proxyPort, 'existing');
             if (existingSession) {
+                upsertRegistryEntry({
+                    proxyPort: options.proxyPort,
+                    session: existingSession,
+                    certificateContent: initialCertificate,
+                    configAvailable: true,
+                    certificateAvailable: true,
+                    source: 'existing-config'
+                });
                 return {
                     success: true,
                     proxyPort: options.proxyPort,
@@ -72,7 +99,42 @@ export async function prepareAndroidProxySession(options: {
                 };
             }
 
-            const recoveredSession = await createRemoteSession(options.proxyPort, 'start');
+            let recoveredSession: Pick<Mockttp, 'forGet' | 'forAnyRequest'> | undefined;
+            try {
+                recoveredSession = await createRemoteSession(options.proxyPort, 'start');
+            } catch (error) {
+                if (isAddrInUseError(error)) {
+                    const fallbackRegistrySession = getRegistryEntry(options.proxyPort, initialCertificate);
+                    if (fallbackRegistrySession) {
+                        return {
+                            success: true,
+                            proxyPort: options.proxyPort,
+                            source: 'existing-active-session-registry-after-eaddrinuse',
+                            configAvailable: true,
+                            certificateAvailable: true,
+                            staleExistingConfig: false,
+                            ruleSessionHandleAvailable: true,
+                            certificateContent: initialCertificate,
+                            session: fallbackRegistrySession.session,
+                            errors: [],
+                            warnings: ['mockttp-start-eaddrinuse-registry-reused']
+                        };
+                    }
+                    return {
+                        success: false,
+                        proxyPort: options.proxyPort,
+                        source: 'unavailable',
+                        configAvailable: true,
+                        certificateAvailable: true,
+                        staleExistingConfig: true,
+                        ruleSessionHandleAvailable: false,
+                        certificateContent: initialCertificate,
+                        errors: ['proxy-port-in-use-without-session-handle'],
+                        warnings: ['existing-config-without-rule-session-handle']
+                    };
+                }
+                throw error;
+            }
             if (!recoveredSession) {
                 return {
                     success: false,
@@ -117,6 +179,14 @@ export async function prepareAndroidProxySession(options: {
                     warnings: ['existing-config-without-rule-session-handle']
                 };
             }
+            upsertRegistryEntry({
+                proxyPort: options.proxyPort,
+                session: recoveredSession,
+                certificateContent: recoveredCertificate,
+                configAvailable: true,
+                certificateAvailable: true,
+                source: 'stale-existing-config-recovered-by-remote-start'
+            });
 
             return {
                 success: true,
@@ -133,7 +203,41 @@ export async function prepareAndroidProxySession(options: {
             };
         }
 
-        const session = await createRemoteSession(options.proxyPort, 'start');
+        let session: Pick<Mockttp, 'forGet' | 'forAnyRequest'> | undefined;
+        try {
+            session = await createRemoteSession(options.proxyPort, 'start');
+        } catch (error) {
+            if (isAddrInUseError(error)) {
+                const registrySession = getRegistryEntry(options.proxyPort);
+                if (registrySession) {
+                    return {
+                        success: true,
+                        proxyPort: options.proxyPort,
+                        source: 'existing-active-session-registry-after-eaddrinuse',
+                        configAvailable: registrySession.configAvailable,
+                        certificateAvailable: registrySession.certificateAvailable,
+                        staleExistingConfig: false,
+                        ruleSessionHandleAvailable: true,
+                        certificateContent: registrySession.certificateContent,
+                        session: registrySession.session,
+                        errors: [],
+                        warnings: ['mockttp-start-eaddrinuse-registry-reused']
+                    };
+                }
+                return {
+                    success: false,
+                    proxyPort: options.proxyPort,
+                    source: 'unavailable',
+                    configAvailable: false,
+                    certificateAvailable: false,
+                    staleExistingConfig: false,
+                    ruleSessionHandleAvailable: false,
+                    errors: ['proxy-port-in-use-without-session-handle'],
+                    warnings: []
+                };
+            }
+            throw error;
+        }
         if (!session) {
             return {
                 success: false,
@@ -178,6 +282,14 @@ export async function prepareAndroidProxySession(options: {
                 warnings: []
             };
         }
+        upsertRegistryEntry({
+            proxyPort: options.proxyPort,
+            session,
+            certificateContent: startedCertificate,
+            configAvailable: true,
+            certificateAvailable: true,
+            source: 'mockttp-remote-start'
+        });
 
         return {
             success: true,
@@ -205,6 +317,48 @@ export async function prepareAndroidProxySession(options: {
             warnings: []
         };
     }
+}
+
+type AndroidSessionRegistryEntry = {
+    proxyPort: number;
+    session: Pick<Mockttp, 'forGet' | 'forAnyRequest'>;
+    certificateContent?: string;
+    configAvailable: boolean;
+    certificateAvailable: boolean;
+    bootstrapRulesApplied?: boolean;
+    createdAt: number;
+    lastUsedAt: number;
+    source: AndroidProxySessionSource;
+};
+
+const activeSessionRegistry = new Map<number, AndroidSessionRegistryEntry>();
+
+function upsertRegistryEntry(entry: Omit<AndroidSessionRegistryEntry, 'createdAt' | 'lastUsedAt'>) {
+    const now = Date.now();
+    const existing = activeSessionRegistry.get(entry.proxyPort);
+    activeSessionRegistry.set(entry.proxyPort, {
+        ...entry,
+        createdAt: existing?.createdAt ?? now,
+        lastUsedAt: now,
+        bootstrapRulesApplied: existing?.bootstrapRulesApplied
+    });
+}
+
+function getRegistryEntry(proxyPort: number, certificateContent?: string): AndroidSessionRegistryEntry | undefined {
+    const entry = activeSessionRegistry.get(proxyPort);
+    if (!entry) return;
+    if (certificateContent !== undefined && entry.certificateContent !== certificateContent) return;
+    entry.lastUsedAt = Date.now();
+    return entry;
+}
+
+function isAddrInUseError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.toLowerCase().includes('eaddrinuse');
+}
+
+export function __resetAndroidSessionRegistryForTests() {
+    activeSessionRegistry.clear();
 }
 
 const createDefaultRemoteSession = (adminBaseUrl: string, origin: string) => {

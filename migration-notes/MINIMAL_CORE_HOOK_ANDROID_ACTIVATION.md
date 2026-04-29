@@ -257,6 +257,35 @@ Real-device runs now confirm the official core bridge control-plane path is heal
    - `lastSuccessfulStartHeadless` (last known good control-plane result)
 4. Later failed/redundant attempts no longer erase the last successful bridge state.
 
+## Android start-headless idempotency fix on repeated proxyPort (April 29, 2026)
+
+### Real run result captured
+
+- First `POST /automation/android-adb/start-headless` on `proxyPort=8000` succeeded with:
+  - `controlPlaneSuccess=true`
+  - `proxySessionSource="stale-existing-config-recovered-by-remote-start"`
+  - `ruleSessionHandleAvailable=true`
+  - `bootstrapRulesApplied=true`
+- Repeated call on `proxyPort=8000` failed with raw `EADDRINUSE`.
+
+### Minimal core behavior update
+
+1. Added an in-memory active Android proxy session registry keyed by `proxyPort`.
+2. Registry entries persist:
+   - session handle
+   - certificate content
+   - config/certificate availability
+   - timestamps and source
+3. On repeated start-headless for same port, bridge now reuses active registry session when config/certificate are still present:
+   - `proxySessionSource="existing-active-session-registry"`
+   - no second Mockttp start on `8000`
+4. If stale path attempts start and receives `EADDRINUSE`, bridge/session manager now:
+   - re-check registry and reuse handle when available via `existing-active-session-registry-after-eaddrinuse`
+   - otherwise return structured error `proxy-port-in-use-without-session-handle`
+5. `EADDRINUSE` is treated as a stale/session-handle recovery condition, not as a trigger to move to `8001`.
+
+This preserves the existing success matrix and keeps repeated calls on `8000` idempotent in control-plane behavior.
+
 ### VPN recognition evidence hierarchy
 
 ## Start-headless state/evidence semantic follow-up (April 28, 2026)
