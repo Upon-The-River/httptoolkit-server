@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
+import { finished } from 'node:stream/promises';
 
 import { normalizeNetworkEvent } from './normalize-network-event';
 
@@ -69,7 +70,13 @@ export async function normalizeNetworkJsonl(options: NormalizeNetworkJsonlOption
     }
 
     outStream.end();
-    qidianStream?.end();
+    await finished(outStream);
+
+    if (qidianStream) {
+        qidianStream.end();
+        await finished(qidianStream);
+    }
+
     summary.warnings = Array.from(new Set(warnings));
     return summary;
 }

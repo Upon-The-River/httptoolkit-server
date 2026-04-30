@@ -15,7 +15,8 @@
     "src/qidian/**/*.ts",
     "src/session/**/*.ts",
     "src/android/**/*.ts",
-    "src/headless/**/*.ts"
+    "src/headless/**/*.ts",
+    "src/export/**/*.ts"
   ],
   "exclude": [
     "migration-assets/**/*",

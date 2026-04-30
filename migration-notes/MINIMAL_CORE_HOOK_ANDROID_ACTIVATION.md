@@ -437,3 +437,17 @@ Notes:
   - keep warnings when robust GBK decode is unavailable without external dependency
   - preserve raw original text in raw capture only
 - Normalized records store metadata/hash/sample fields for body analysis and avoid dumping large body payloads by default.
+
+## Normalization validation and flush hardening (April 30, 2026)
+
+- `lab-addon` default `npm test` now includes normalization specs:
+  - `test/normalize-network-event.spec.ts`
+  - `test/qidian-endpoint-router.spec.ts`
+- `lab-addon` `npm run typecheck` now includes `src/export/**/*.ts`, so normalization modules are checked even when they are not imported by `src/server.ts`.
+- `normalizeNetworkJsonl` now waits for output stream completion before returning summary:
+  - waits for `normalized_network_events.jsonl` stream finish
+  - waits for optional `qidian_endpoint_events.jsonl` stream finish
+
+Behavior preserved:
+- raw `session_hits.jsonl` remains input-only and unchanged.
+- mojibake strategy remains detect-only with warning `gbk-repair-requires-iconv-lite-or-external-decoder` and no new dependency.
