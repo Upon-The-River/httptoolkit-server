@@ -1192,3 +1192,95 @@ describe('lab addon service endpoints', () => {
     });
 
 });
+
+describe('export output path env integration', () => {
+    const withEnv = async (env: Record<string, string | undefined>, run: () => Promise<void>): Promise<void> => {
+        const previous = {
+            HTK_LAB_ADDON_RUNTIME_ROOT: process.env.HTK_LAB_ADDON_RUNTIME_ROOT,
+            HTK_LAB_ADDON_EXPORT_DIR: process.env.HTK_LAB_ADDON_EXPORT_DIR,
+            HTK_LAB_ADDON_EXPORT_JSONL_PATH: process.env.HTK_LAB_ADDON_EXPORT_JSONL_PATH
+        };
+
+        const apply = (key: keyof typeof previous, value: string | undefined) => {
+            if (value === undefined) {
+                delete process.env[key];
+            } else {
+                process.env[key] = value;
+            }
+        };
+
+        apply('HTK_LAB_ADDON_RUNTIME_ROOT', env.HTK_LAB_ADDON_RUNTIME_ROOT);
+        apply('HTK_LAB_ADDON_EXPORT_DIR', env.HTK_LAB_ADDON_EXPORT_DIR);
+        apply('HTK_LAB_ADDON_EXPORT_JSONL_PATH', env.HTK_LAB_ADDON_EXPORT_JSONL_PATH);
+
+        try {
+            await run();
+        } finally {
+            apply('HTK_LAB_ADDON_RUNTIME_ROOT', previous.HTK_LAB_ADDON_RUNTIME_ROOT);
+            apply('HTK_LAB_ADDON_EXPORT_DIR', previous.HTK_LAB_ADDON_EXPORT_DIR);
+            apply('HTK_LAB_ADDON_EXPORT_JSONL_PATH', previous.HTK_LAB_ADDON_EXPORT_JSONL_PATH);
+        }
+    };
+
+    it('returns external path from /export/output-status when HTK_LAB_ADDON_EXPORT_DIR is set', async () => {
+        const externalRoot = await createTempRuntimeRoot();
+
+        await withEnv({
+            HTK_LAB_ADDON_RUNTIME_ROOT: undefined,
+            HTK_LAB_ADDON_EXPORT_DIR: externalRoot,
+            HTK_LAB_ADDON_EXPORT_JSONL_PATH: undefined
+        }, async () => {
+            const { baseUrl } = await startTestServer(createApp());
+
+            const response = await fetch(`${baseUrl}/export/output-status`);
+            assert.equal(response.status, 200);
+            const body = await response.json();
+
+            assert.equal(body.exportDir, externalRoot);
+            assert.equal(body.jsonlPath, path.join(externalRoot, 'session_hits.jsonl'));
+        });
+    });
+
+    it('persists /export/ingest to external path when persist=true and HTK_LAB_ADDON_EXPORT_DIR is set', async () => {
+        const externalRoot = await createTempRuntimeRoot();
+
+        await withEnv({
+            HTK_LAB_ADDON_RUNTIME_ROOT: undefined,
+            HTK_LAB_ADDON_EXPORT_DIR: externalRoot,
+            HTK_LAB_ADDON_EXPORT_JSONL_PATH: undefined
+        }, async () => {
+            const { baseUrl } = await startTestServer(createApp({
+                exportTargetsLoader: async () => ({
+                    enabled: true,
+                    targets: [{
+                        name: 'env-target',
+                        methods: ['GET'],
+                        urlIncludes: ['example.com'],
+                        statusCodes: [200]
+                    }]
+                })
+            }));
+
+            const response = await fetch(`${baseUrl}/export/ingest`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    event: {
+                        method: 'GET',
+                        url: 'https://example.com/external',
+                        statusCode: 200
+                    },
+                    persist: true
+                })
+            });
+
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.persisted, true);
+            assert.equal(body.outputPath, path.join(externalRoot, 'session_hits.jsonl'));
+
+            const fileContent = await fs.readFile(path.join(externalRoot, 'session_hits.jsonl'), 'utf8');
+            assert.equal(fileContent.includes('https://example.com/external'), true);
+        });
+    });
+});

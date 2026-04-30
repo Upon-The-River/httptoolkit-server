@@ -22,17 +22,26 @@ const resolvePath = (targetPath: string): string => {
         : path.resolve(getAddonRoot(), targetPath);
 };
 
-export const resolveExportRuntimePaths = (overrides: ExportRuntimePathOverrides = {}): ExportRuntimePaths => {
-    const runtimeRoot = overrides.runtimeRoot
-        ? resolvePath(overrides.runtimeRoot)
-        : path.resolve(getAddonRoot(), 'runtime');
+const readPathEnv = (name: 'HTK_LAB_ADDON_RUNTIME_ROOT' | 'HTK_LAB_ADDON_EXPORT_DIR' | 'HTK_LAB_ADDON_EXPORT_JSONL_PATH'): string | undefined => {
+    const raw = process.env[name];
+    if (!raw) return undefined;
 
-    const exportDir = overrides.exportDir
-        ? resolvePath(overrides.exportDir)
+    const trimmed = raw.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+};
+
+export const resolveExportRuntimePaths = (overrides: ExportRuntimePathOverrides = {}): ExportRuntimePaths => {
+    const runtimeRootInput = overrides.runtimeRoot ?? readPathEnv('HTK_LAB_ADDON_RUNTIME_ROOT') ?? 'runtime';
+    const runtimeRoot = resolvePath(runtimeRootInput);
+
+    const exportDirInput = overrides.exportDir ?? readPathEnv('HTK_LAB_ADDON_EXPORT_DIR');
+    const exportDir = exportDirInput
+        ? resolvePath(exportDirInput)
         : path.resolve(runtimeRoot, 'exports');
 
-    const jsonlPath = overrides.jsonlPath
-        ? resolvePath(overrides.jsonlPath)
+    const jsonlPathInput = overrides.jsonlPath ?? readPathEnv('HTK_LAB_ADDON_EXPORT_JSONL_PATH');
+    const jsonlPath = jsonlPathInput
+        ? resolvePath(jsonlPathInput)
         : path.resolve(exportDir, 'session_hits.jsonl');
 
     return {
