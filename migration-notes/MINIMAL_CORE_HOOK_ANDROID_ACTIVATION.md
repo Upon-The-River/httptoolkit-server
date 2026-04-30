@@ -384,3 +384,27 @@ Final contract after this patch:
 
 Known downstream issue (not solved here):
 - Some JSONL body text may still show mojibake. This needs a later normalization/encoding pass.
+
+## Qidian capture operator wrapper flow (April 30, 2026)
+
+Recommended daily flow:
+
+```powershell
+cd lab-addon
+powershell -ExecutionPolicy Bypass -File .\scripts\qidian-capture-once.ps1 -DeviceId 23091JEGR04484 -ProxyPort 8000 -TimeoutSeconds 90 -SkipSmoke
+```
+
+Contract:
+
+- `start-headless` is a one-shot activation command.
+- Do not repeatedly invoke `start-headless` for connection detection.
+- If `EADDRINUSE` appears after a previous successful start, treat it as a possible active `8000` session and validate via JSONL growth + target URL hit.
+- Final success requires both:
+  - `session_hits.jsonl` size growth after baseline.
+  - Recent appended lines containing `qidian.com` or `druidv6.if.qidian.com`.
+
+Known limitations:
+
+- `body.inline` Chinese text can still appear mojibake; this is a downstream normalization/encoding task.
+- If JSONL does not grow, restart services or re-activate HTTP Toolkit on the phone.
+- `dumpsys vpn` is not the final success criterion for capture readiness.
