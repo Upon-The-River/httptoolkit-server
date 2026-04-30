@@ -110,3 +110,63 @@ function Write-QidianCaptureReport {
     New-QidianCaptureRuntimeDir -Path $Path
     Set-Content -LiteralPath $Path -Value ($Lines -join "`r`n") -Encoding utf8
 }
+
+
+function Get-QidianTargetHitsSinceOffset {
+    param(
+        [Parameter(Mandatory = $true)][string]$JsonlPath,
+        [Parameter(Mandatory = $true)][int64]$OffsetBytes,
+        [string]$Pattern = 'qidian.com|druidv6.if.qidian.com',
+        [int]$MaxSamples = 10
+    )
+
+    if (-not (Test-Path -LiteralPath $JsonlPath)) {
+        return [pscustomobject]@{ matched = $false; sampleUrls = @(); sampleLines = @(); appendedLineCount = 0 }
+    }
+
+    $sampleUrls = New-Object System.Collections.Generic.List[string]
+    $sampleLines = New-Object System.Collections.Generic.List[string]
+    $appendedLineCount = 0
+
+    $fileStream = $null
+    $reader = $null
+    try {
+        $fileStream = [System.IO.File]::Open($JsonlPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $safeOffset = [Math]::Max(0, [Math]::Min($OffsetBytes, $fileStream.Length))
+        $fileStream.Seek($safeOffset, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $reader = [System.IO.StreamReader]::new($fileStream, [System.Text.UTF8Encoding]::new($false), $true, 4096, $true)
+
+        while (-not $reader.EndOfStream) {
+            $line = $reader.ReadLine()
+            if ($null -eq $line) { continue }
+            $appendedLineCount++
+            if ($line -notmatch $Pattern) { continue }
+
+            $sampleLines.Add((Format-QidianShortLine -Line $line)) | Out-Null
+            try {
+                $obj = $line | ConvertFrom-Json -ErrorAction Stop
+                if ($obj.url) {
+                    $sampleUrls.Add([string]$obj.url) | Out-Null
+                } else {
+                    $sampleUrls.Add((Format-QidianShortLine -Line $line)) | Out-Null
+                }
+            }
+            catch {
+                $sampleUrls.Add((Format-QidianShortLine -Line $line)) | Out-Null
+            }
+
+            if ($sampleUrls.Count -ge $MaxSamples) { break }
+        }
+    }
+    finally {
+        if ($reader) { $reader.Dispose() }
+        if ($fileStream) { $fileStream.Dispose() }
+    }
+
+    return [pscustomobject]@{
+        matched = $sampleUrls.Count -gt 0
+        sampleUrls = @($sampleUrls | Select-Object -First $MaxSamples)
+        sampleLines = @($sampleLines | Select-Object -First $MaxSamples)
+        appendedLineCount = $appendedLineCount
+    }
+}

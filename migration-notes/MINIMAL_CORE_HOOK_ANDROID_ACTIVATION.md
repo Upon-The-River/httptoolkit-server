@@ -408,3 +408,13 @@ Known limitations:
 - `body.inline` Chinese text can still appear mojibake; this is a downstream normalization/encoding task.
 - If JSONL does not grow, restart services or re-activate HTTP Toolkit on the phone.
 - `dumpsys vpn` is not the final success criterion for capture readiness.
+
+
+## Qidian capture wrapper operational notes (April 30, 2026)
+
+- `lab-addon/scripts/qidian-capture-*.ps1` are operational wrappers around existing addon/core APIs; they do not change official core activation behavior.
+- Wrapper final success is evaluated as both:
+  - post-baseline JSONL growth (`sizeBytes` delta), and
+  - post-baseline target URL hit (`qidian.com|druidv6.if.qidian.com`) from appended JSONL content only.
+- `start-headless` remains single-shot. If response indicates `EADDRINUSE`, wrapper records warning `start-headless-eaddrinuse-existing-session-possible`, persists state, and exits `0` for follow-up watch.
+- Wrapper does not retry `start-headless`, loop starts, or kill proxy port `8000`.

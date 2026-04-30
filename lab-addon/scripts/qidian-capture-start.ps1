@@ -14,6 +14,8 @@ $ErrorActionPreference = 'Stop'
 Set-QidianCaptureUtf8
 
 $labRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if (-not [System.IO.Path]::IsPathRooted($StatePath)) { $StatePath = Join-Path $labRoot $StatePath }
+if (-not [System.IO.Path]::IsPathRooted($ReportPath)) { $ReportPath = Join-Path $labRoot $ReportPath }
 Set-Location $labRoot
 
 $adbList = & adb devices
@@ -32,7 +34,7 @@ if (-not $SkipSmoke) {
 $status = Get-QidianExportStatus -AddonBaseUrl $AddonBaseUrl
 $jsonlPath = $status.jsonlPath
 if ($ClearJsonl -and (Test-Path -LiteralPath $jsonlPath)) {
-    Set-Content -LiteralPath $jsonlPath -Value '' -Encoding utf8
+    Clear-Content -LiteralPath $jsonlPath
     $status = Get-QidianExportStatus -AddonBaseUrl $AddonBaseUrl
 }
 $baselineBytes = [int64]$status.sizeBytes
@@ -47,7 +49,7 @@ try {
     $state.controlPlaneSuccess = $startResp.controlPlaneSuccess
     $state.sessionActive = $startResp.session.active
     $state.effectiveProxyPort = $startResp.effectiveProxyPort
-    $state.proxySessionSource = $startResp.bridgeResponse.proxySessionSource
+    $state.proxySessionSource = if ($startResp.activationResult -and $startResp.activationResult.bridgeResponse) { $startResp.activationResult.bridgeResponse.proxySessionSource } elseif ($startResp.bridgeResponse) { $startResp.bridgeResponse.proxySessionSource } else { $null }
 }
 catch {
     $raw = $_.Exception.Message
@@ -76,10 +78,10 @@ $report = @(
 "- sessionActive: $($state.sessionActive)",
 "- effectiveProxyPort: $($state.effectiveProxyPort)",
 "- proxySessionSource: $($state.proxySessionSource)",
-"- next: powershell -ExecutionPolicy Bypass -File .\scripts\qidian-capture-watch.ps1 -StatePath \"$StatePath\""
+"- next: powershell -ExecutionPolicy Bypass -File .\scripts\qidian-capture-watch.ps1 -StatePath `"$StatePath`""
 )
 Write-QidianCaptureReport -Path $ReportPath -Lines $report
-Write-Host "Next command: powershell -ExecutionPolicy Bypass -File .\scripts\qidian-capture-watch.ps1 -StatePath \"$StatePath\""
+Write-Host "Next command: powershell -ExecutionPolicy Bypass -File .\scripts\qidian-capture-watch.ps1 -StatePath `"$StatePath`""
 
 if ($hardStartError) { exit 2 }
 exit 0

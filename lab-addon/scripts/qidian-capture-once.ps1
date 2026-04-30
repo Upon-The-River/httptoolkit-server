@@ -13,6 +13,10 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+$labRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if (-not [System.IO.Path]::IsPathRooted($StatePath)) { $StatePath = Join-Path $labRoot $StatePath }
+if (-not [System.IO.Path]::IsPathRooted($ReportPath)) { $ReportPath = Join-Path $labRoot $ReportPath }
+
 $startArgs = @('-ExecutionPolicy','Bypass','-File',"$PSScriptRoot/qidian-capture-start.ps1",'-AddonBaseUrl',$AddonBaseUrl,'-BridgeBaseUrl',$BridgeBaseUrl,'-DeviceId',$DeviceId,'-ProxyPort',$ProxyPort,'-StatePath',$StatePath,'-ReportPath',$ReportPath)
 if ($ClearJsonl) { $startArgs += '-ClearJsonl' }
 if ($SkipSmoke) { $startArgs += '-SkipSmoke' }
