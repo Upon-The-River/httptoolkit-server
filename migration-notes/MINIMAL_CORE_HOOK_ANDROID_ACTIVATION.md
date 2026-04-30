@@ -418,3 +418,22 @@ Known limitations:
   - post-baseline target URL hit (`qidian.com|druidv6.if.qidian.com`) from appended JSONL content only.
 - `start-headless` remains single-shot. If response indicates `EADDRINUSE`, wrapper records warning `start-headless-eaddrinuse-existing-session-possible`, persists state, and exits `0` for follow-up watch.
 - Wrapper does not retry `start-headless`, loop starts, or kill proxy port `8000`.
+
+## JSONL normalization layer for downstream consumers (April 30, 2026)
+
+To keep capture and control-plane behavior unchanged while making exported traffic more stable for analysis, addon-only normalization is added as a derived pipeline:
+
+- Raw capture artifact (unchanged): `lab-addon/runtime/exports/session_hits.jsonl`
+- Derived normalized artifact: `lab-addon/runtime/exports/normalized_network_events.jsonl`
+- Derived Qidian-filtered artifact: `lab-addon/runtime/exports/qidian_endpoint_events.jsonl`
+
+Notes:
+
+- `session_hits.jsonl` remains immutable capture evidence.
+- Normalization is best-effort, line-by-line, and tolerant of malformed/partial JSONL lines.
+- Qidian endpoint routing is based on host + path (not a single hardcoded endpoint).
+- Mojibake repair is auditable and conservative in v1:
+  - detect and flag likely mojibake patterns
+  - keep warnings when robust GBK decode is unavailable without external dependency
+  - preserve raw original text in raw capture only
+- Normalized records store metadata/hash/sample fields for body analysis and avoid dumping large body payloads by default.
