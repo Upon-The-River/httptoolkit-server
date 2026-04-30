@@ -12,6 +12,10 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/lib/qidian-capture-common.ps1"
 Set-QidianCaptureUtf8
 
+$labRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if (-not [System.IO.Path]::IsPathRooted($StatePath)) { $StatePath = Join-Path $labRoot $StatePath }
+if (-not [System.IO.Path]::IsPathRooted($ReportPath)) { $ReportPath = Join-Path $labRoot $ReportPath }
+
 $state = Load-QidianCaptureState -Path $StatePath
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $hitSamples = @()
@@ -22,11 +26,11 @@ while ((Get-Date) -lt $deadline) {
     $status = Get-QidianExportStatus -AddonBaseUrl $state.addonBaseUrl
     $currentBytes = [int64]$status.sizeBytes
     $delta = $currentBytes - [int64]$state.baselineBytes
-    $hits = Get-QidianTargetHitsFromTail -JsonlPath $state.jsonlPath -Pattern $Pattern -Tail $Tail
+    $hits = Get-QidianTargetHitsSinceOffset -JsonlPath $state.jsonlPath -OffsetBytes ([int64]$state.baselineBytes) -Pattern $Pattern -MaxSamples 10
     $hitSeen = [bool]$hits.matched
     if ($hitSeen) { $hitSamples = @($hits.sampleUrls | Select-Object -First 10) }
 
-    Write-Host "[$((Get-Date).ToString('HH:mm:ss'))] baseline=$($state.baselineBytes) current=$currentBytes delta=$delta targetHit=$hitSeen"
+    Write-Host "[$((Get-Date).ToString('HH:mm:ss'))] baseline=$($state.baselineBytes) current=$currentBytes delta=$delta targetHitSinceBaseline=$hitSeen"
     if ($currentBytes -gt ([int64]$state.baselineBytes + $MinGrowthBytes) -and $hitSeen) { $success = $true; break }
     Start-Sleep -Seconds $PollSeconds
 }
