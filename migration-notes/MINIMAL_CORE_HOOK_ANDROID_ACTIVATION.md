@@ -451,3 +451,30 @@ Notes:
 Behavior preserved:
 - raw `session_hits.jsonl` remains input-only and unchanged.
 - mojibake strategy remains detect-only with warning `gbk-repair-requires-iconv-lite-or-external-decoder` and no new dependency.
+
+## Lab-addon export output directory configuration (April 30, 2026)
+
+To avoid polluting the `httptoolkit-server-main` working tree, lab-addon export output now supports env-configured external paths while keeping backward-compatible defaults.
+
+Default-compatible behavior remains:
+
+- runtime root defaults to `lab-addon/runtime`
+- export directory defaults to `lab-addon/runtime/exports`
+- raw JSONL defaults to `lab-addon/runtime/exports/session_hits.jsonl`
+
+Recommended production setup:
+
+- set `HTK_LAB_ADDON_EXPORT_DIR` before starting lab-addon
+- example: `C:\Users\Card\Desktop\DataBase\httptoolkit_exports\qidian`
+
+With that env set:
+
+- raw output goes to: `...\qidian\session_hits.jsonl`
+- normalized output should go to:
+  - `...\qidian\normalized_network_events.jsonl`
+  - `...\qidian\qidian_endpoint_events.jsonl`
+
+Notes:
+
+- qidian capture wrappers rely on `/export/output-status` for live jsonl path discovery (no hardcoded runtime export path for capture state).
+- This is addon-only behavior; official core Android activation/interceptor flows are unchanged.

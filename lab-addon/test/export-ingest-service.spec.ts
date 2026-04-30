@@ -256,3 +256,80 @@ describe('export ingest service', () => {
         assert.deepEqual(sink.readRecordsForTests(), []);
     });
 });
+
+
+describe('export runtime path env resolution', () => {
+    const addonRoot = path.resolve(__dirname, '..');
+
+    const withEnv = <T>(env: Record<string, string | undefined>, run: () => T): T => {
+        const previous = {
+            HTK_LAB_ADDON_RUNTIME_ROOT: process.env.HTK_LAB_ADDON_RUNTIME_ROOT,
+            HTK_LAB_ADDON_EXPORT_DIR: process.env.HTK_LAB_ADDON_EXPORT_DIR,
+            HTK_LAB_ADDON_EXPORT_JSONL_PATH: process.env.HTK_LAB_ADDON_EXPORT_JSONL_PATH
+        };
+
+        const apply = (key: keyof typeof previous, value: string | undefined) => {
+            if (value === undefined) {
+                delete process.env[key];
+            } else {
+                process.env[key] = value;
+            }
+        };
+
+        apply('HTK_LAB_ADDON_RUNTIME_ROOT', env.HTK_LAB_ADDON_RUNTIME_ROOT);
+        apply('HTK_LAB_ADDON_EXPORT_DIR', env.HTK_LAB_ADDON_EXPORT_DIR);
+        apply('HTK_LAB_ADDON_EXPORT_JSONL_PATH', env.HTK_LAB_ADDON_EXPORT_JSONL_PATH);
+
+        try {
+            return run();
+        } finally {
+            apply('HTK_LAB_ADDON_RUNTIME_ROOT', previous.HTK_LAB_ADDON_RUNTIME_ROOT);
+            apply('HTK_LAB_ADDON_EXPORT_DIR', previous.HTK_LAB_ADDON_EXPORT_DIR);
+            apply('HTK_LAB_ADDON_EXPORT_JSONL_PATH', previous.HTK_LAB_ADDON_EXPORT_JSONL_PATH);
+        }
+    };
+
+    it('uses env runtime root when no override is provided', () => {
+        const resolved = withEnv({
+            HTK_LAB_ADDON_RUNTIME_ROOT: 'runtime-from-env',
+            HTK_LAB_ADDON_EXPORT_DIR: undefined,
+            HTK_LAB_ADDON_EXPORT_JSONL_PATH: undefined
+        }, () => resolveExportRuntimePaths());
+
+        assert.equal(resolved.runtimeRoot, path.resolve(addonRoot, 'runtime-from-env'));
+        assert.equal(resolved.exportDir, path.resolve(addonRoot, 'runtime-from-env', 'exports'));
+        assert.equal(resolved.jsonlPath, path.resolve(addonRoot, 'runtime-from-env', 'exports', 'session_hits.jsonl'));
+    });
+
+    it('explicit constructor override beats env values', () => {
+        const resolved = withEnv({
+            HTK_LAB_ADDON_RUNTIME_ROOT: 'runtime-from-env',
+            HTK_LAB_ADDON_EXPORT_DIR: 'exports-from-env',
+            HTK_LAB_ADDON_EXPORT_JSONL_PATH: 'jsonl-from-env/session_hits.jsonl'
+        }, () => resolveExportRuntimePaths({ runtimeRoot: 'runtime-from-override' }));
+
+        assert.equal(resolved.runtimeRoot, path.resolve(addonRoot, 'runtime-from-override'));
+    });
+
+    it('export dir env produces jsonlPath under export dir when jsonl env is absent', () => {
+        const resolved = withEnv({
+            HTK_LAB_ADDON_RUNTIME_ROOT: undefined,
+            HTK_LAB_ADDON_EXPORT_DIR: 'exports-from-env',
+            HTK_LAB_ADDON_EXPORT_JSONL_PATH: undefined
+        }, () => resolveExportRuntimePaths());
+
+        assert.equal(resolved.exportDir, path.resolve(addonRoot, 'exports-from-env'));
+        assert.equal(resolved.jsonlPath, path.resolve(addonRoot, 'exports-from-env', 'session_hits.jsonl'));
+    });
+
+    it('jsonl path env beats export dir env', () => {
+        const resolved = withEnv({
+            HTK_LAB_ADDON_RUNTIME_ROOT: undefined,
+            HTK_LAB_ADDON_EXPORT_DIR: 'exports-from-env',
+            HTK_LAB_ADDON_EXPORT_JSONL_PATH: 'records-from-env/capture.jsonl'
+        }, () => resolveExportRuntimePaths());
+
+        assert.equal(resolved.exportDir, path.resolve(addonRoot, 'exports-from-env'));
+        assert.equal(resolved.jsonlPath, path.resolve(addonRoot, 'records-from-env', 'capture.jsonl'));
+    });
+});
