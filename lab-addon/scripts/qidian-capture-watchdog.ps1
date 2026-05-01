@@ -7,9 +7,13 @@ param(
     [string]$ExportDir = $(if ($env:HTK_LAB_ADDON_EXPORT_DIR) { $env:HTK_LAB_ADDON_EXPORT_DIR } else { 'C:\Users\Card\Desktop\DataBase\httptoolkit_exports\qidian' }),
     [int]$PollSeconds = 30,
     [int]$NoGrowthActivateSeconds = 60,
+    [int]$NoGrowthRestartHtkSeconds = 120,
     [int]$ActivationCooldownSeconds = 180,
+    [int]$HtkRestartCooldownSeconds = 180,
     [int]$AlertCooldownSeconds = 180,
     [bool]$AutoActivate = $true,
+    [bool]$AutoRestartHtk = $true,
+    [string]$HtkPackage = 'tech.httptoolkit.android.v1',
     [bool]$CheckPhoneNetwork = $true,
     [bool]$CheckDns = $true,
     [bool]$Beep = $true,
@@ -28,7 +32,9 @@ $lastSize = if (Test-Path $jsonlPath) { (Get-Item $jsonlPath).Length } else { 0 
 $lastGrowthAt = Get-Date
 $lastTargetHitAt = $null
 $lastActivateAt = $null
+$lastHtkRestartAt = $null
 $lastActivationResult = 'none'
+$lastRecoveryAction = 'none'
 $lastAlert = $null
 $lastAlertsByKey = @{}
 
@@ -105,6 +111,7 @@ while ($true) {
 
     $secondsSinceGrowth = [int](($checkedAt - $lastGrowthAt).TotalSeconds)
     $secondsSinceActivate = if ($lastActivateAt) { [int](($checkedAt - $lastActivateAt).TotalSeconds) } else { $null }
+    $secondsSinceHtkRestart = if ($lastHtkRestartAt) { [int](($checkedAt - $lastHtkRestartAt).TotalSeconds) } else { $null }
     if (-not $proxyPortOpen -and $secondsSinceGrowth -ge $NoGrowthActivateSeconds) {
       [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'proxy-port-down-warning' -Message ("Proxy port {0} is closed (warning-only; JSONL growth is source of truth)" -f $ProxyPort))
     }
@@ -116,6 +123,7 @@ while ($true) {
       $lastActivateAt = $checkedAt
       $startResult = Invoke-QidianStartHeadlessOnce -AddonBaseUrl $AddonBaseUrl -DeviceId $DeviceId -ProxyPort $ProxyPort
       $lastActivationResult = $startResult.responseSummary
+      $lastRecoveryAction = 'activate-start-headless-once'
       if ($startResult.warning -eq 'eaddrinuse-existing-session-possible') {
         [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-warning-eaddrinuse' -Message 'Start-headless returned EADDRINUSE; existing session may still be active')
       } elseif ($startResult.errorReason -eq 'official-admin-server-unreachable') {
@@ -127,15 +135,35 @@ while ($true) {
       }
     }
 
+    $shouldRestartHtk = $AutoRestartHtk -and $activationPrereqsOk -and ($secondsSinceGrowth -ge $NoGrowthRestartHtkSeconds) -and (-not $lastHtkRestartAt -or $secondsSinceHtkRestart -ge $HtkRestartCooldownSeconds)
+    if ($phonePingIpOk -eq $false) { $shouldRestartHtk = $false }
+    if ($shouldRestartHtk) {
+      $restartResult = Restart-QidianHtkAndroidApp -AddonBaseUrl $AddonBaseUrl -DeviceId $DeviceId -HtkPackage $HtkPackage -ProxyPort $ProxyPort
+      $lastHtkRestartAt = $checkedAt
+      $lastRecoveryAction = 'restart-htk-android'
+      $lastActivationResult = $restartResult.startHeadlessResponseSummary
+      if ($restartResult.warning -eq 'eaddrinuse-existing-session-possible') {
+        [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'htk-restart-warning-eaddrinuse' -Message 'HTK Android restart start-headless returned EADDRINUSE; existing session may still be active')
+      } elseif ($restartResult.errorReason) {
+        [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'htk-restart-error' -Message $restartResult.errorReason)
+      } else {
+        [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'htk-restart-ok' -Message "Restarted phone-side HTTP Toolkit Android package $HtkPackage and invoked start-headless once")
+      }
+    }
+
     $statusObj = [ordered]@{
       checkedAt = $checkedAt.ToString('o'); ports = $ports; proxyPortOpen = $proxyPortOpen; addonHealthOk = $addonHealthOk; bridgeHealthOk = $bridgeHealthOk; exportStatusOk = $exportStatusOk;
       jsonlPath = $jsonlPath; jsonlSizeBytes = $jsonlSizeBytes; lastGrowthAt = $lastGrowthAt.ToString('o'); secondsSinceGrowth = $secondsSinceGrowth;
       lastTargetHitAt = if ($lastTargetHitAt) { $lastTargetHitAt.ToString('o') } else { $null };
       secondsSinceTargetHit = if ($lastTargetHitAt) { [int](($checkedAt - $lastTargetHitAt).TotalSeconds) } else { $null };
       lastActivateAt = if ($lastActivateAt) { $lastActivateAt.ToString('o') } else { $null };
-      secondsSinceActivate = $secondsSinceActivate; adbOk = $adbOk; phonePingIpOk = $phonePingIpOk; phonePingDnsOk = $phonePingDnsOk;
+      secondsSinceActivate = $secondsSinceActivate;
+      lastHtkRestartAt = if ($lastHtkRestartAt) { $lastHtkRestartAt.ToString('o') } else { $null };
+      secondsSinceHtkRestart = $secondsSinceHtkRestart;
+      adbOk = $adbOk; phonePingIpOk = $phonePingIpOk; phonePingDnsOk = $phonePingDnsOk;
       autoActivateEnabled = $AutoActivate; noGrowthActivateSeconds = $NoGrowthActivateSeconds; activationCooldownSeconds = $ActivationCooldownSeconds; alertCooldownSeconds = $AlertCooldownSeconds;
-      lastActivationResult = $lastActivationResult; alertHistoryKeys = @($lastAlertsByKey.Keys | Sort-Object); lastAlert = $lastAlert
+      autoRestartHtkEnabled = $AutoRestartHtk; htkPackage = $HtkPackage; noGrowthRestartHtkSeconds = $NoGrowthRestartHtkSeconds; htkRestartCooldownSeconds = $HtkRestartCooldownSeconds;
+      lastActivationResult = $lastActivationResult; lastRecoveryAction = $lastRecoveryAction; alertHistoryKeys = @($lastAlertsByKey.Keys | Sort-Object); lastAlert = $lastAlert
     }
     $statusObj | ConvertTo-Json -Depth 6 | Set-Content -Path $StatusPath -Encoding utf8
     Start-Sleep -Seconds $PollSeconds
