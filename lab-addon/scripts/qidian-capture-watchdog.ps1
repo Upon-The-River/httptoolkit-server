@@ -23,7 +23,7 @@ if (-not $AlertLogPath) { $AlertLogPath = Join-Path $ExportDir 'watchdog_alerts.
 if (-not $StatusPath) { $StatusPath = Join-Path $ExportDir 'watchdog_status.json' }
 $jsonlPath = Join-Path $ExportDir 'session_hits.jsonl'
 New-Item -ItemType Directory -Path $ExportDir -Force | Out-Null
-$portsToCheck = @(45456,45457,45458,45459,8000)
+$portsToCheck = @(45456,45457,45458,45459,$ProxyPort)
 $lastSize = if (Test-Path $jsonlPath) { (Get-Item $jsonlPath).Length } else { 0 }
 $lastGrowthAt = Get-Date
 $lastTargetHitAt = $null
@@ -79,7 +79,7 @@ while ($true) {
         try { $phonePingDnsOk = ((& adb -s $DeviceId shell "ping -c 1 -W 3 qidian.com" 2>$null) -match '1 received|1 packets received') } catch { $phonePingDnsOk = $false }
       }
     }
-    $proxyPortOpen = [bool]$ports['8000']
+    $proxyPortOpen = [bool]$ports["$ProxyPort"]
     $criticalPortsOk = [bool]$ports['45458'] -and [bool]$ports['45459']
 
     if (-not $addonHealthOk) { [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'addon-health-down' -Message 'Addon /health is not healthy') }
@@ -106,30 +106,24 @@ while ($true) {
     $secondsSinceGrowth = [int](($checkedAt - $lastGrowthAt).TotalSeconds)
     $secondsSinceActivate = if ($lastActivateAt) { [int](($checkedAt - $lastActivateAt).TotalSeconds) } else { $null }
     if (-not $proxyPortOpen -and $secondsSinceGrowth -ge $NoGrowthActivateSeconds) {
-      [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'proxy-port-down-warning' -Message 'Proxy port 8000 is closed (warning-only; JSONL growth is source of truth)')
+      [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'proxy-port-down-warning' -Message ("Proxy port {0} is closed (warning-only; JSONL growth is source of truth)" -f $ProxyPort))
     }
-    $activationPrereqsOk = $adbOk -and $phonePingIpOk -and $addonHealthOk -and $bridgeHealthOk
-    $shouldActivate = $AutoActivate -and $activationPrereqsOk -and $secondsSinceGrowth -ge $NoGrowthActivateSeconds -and (-not $lastActivateAt -or $secondsSinceActivate -ge $ActivationCooldownSeconds)
+    $activationPrereqsOk = $adbOk -and $phonePingIpOk -and $addonHealthOk -and $bridgeHealthOk -and $exportStatusOk
+    $repairTrigger = (-not $proxyPortOpen -and $addonHealthOk -and $bridgeHealthOk -and $exportStatusOk) -or ($secondsSinceGrowth -ge $NoGrowthActivateSeconds)
+    $shouldActivate = $AutoActivate -and $activationPrereqsOk -and $repairTrigger -and (-not $lastActivateAt -or $secondsSinceActivate -ge $ActivationCooldownSeconds)
 
     if ($shouldActivate) {
       $lastActivateAt = $checkedAt
-      try {
-        $resp = Invoke-QidianJson -Method POST -Uri ("{0}/automation/android-adb/start-headless" -f $AddonBaseUrl.TrimEnd('/')) -Body @{
-          deviceId = $DeviceId; proxyPort = $ProxyPort; allowUnsafeStart = $true; enableSocks = $false; waitForTraffic = $false; waitForTargetTraffic = $false
-        }
-        $lastActivationResult = ($resp | ConvertTo-Json -Compress)
-        if ($resp.success -eq $true) { [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-attempt-ok' -Message 'Auto-activation succeeded') }
-        else { [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-attempt-failed' -Message 'Auto-activation response was not success=true') }
-      } catch {
-        $msg = $_.Exception.Message
-        if ($msg -match 'EADDRINUSE') {
-          $lastActivationResult = 'warning-existing-session-possible(EADDRINUSE)'
-          [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-warning-eaddrinuse' -Message 'Start-headless returned EADDRINUSE; existing session may still be active')
-        }
-        else {
-          $lastActivationResult = "error: $msg"
-          [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-attempt-error' -Message $msg)
-        }
+      $startResult = Invoke-QidianStartHeadlessOnce -AddonBaseUrl $AddonBaseUrl -DeviceId $DeviceId -ProxyPort $ProxyPort
+      $lastActivationResult = $startResult.responseSummary
+      if ($startResult.warning -eq 'eaddrinuse-existing-session-possible') {
+        [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-warning-eaddrinuse' -Message 'Start-headless returned EADDRINUSE; existing session may still be active')
+      } elseif ($startResult.errorReason -eq 'official-admin-server-unreachable') {
+        [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-admin-unreachable' -Message 'Official admin server at 45456 unreachable; restart official server')
+      } elseif ($startResult.errorReason) {
+        [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-attempt-error' -Message $startResult.errorReason)
+      } else {
+        [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-attempt-ok' -Message 'Auto-activation attempt sent once')
       }
     }
 

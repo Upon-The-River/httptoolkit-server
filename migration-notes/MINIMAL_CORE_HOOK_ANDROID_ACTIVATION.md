@@ -501,3 +501,22 @@ Notes:
 - Phone-network (`adb shell ping 223.5.5.5`) failures are surfaced separately and should not trigger endless activation retries.
 - No-growth alone can still be idle app behavior; in capture-active mode this is treated as a lightweight recovery signal.
 - Watchdog status now reports `alertHistoryKeys` (seen-during-process-lifetime keys) to avoid confusion with currently-active alerts.
+
+## Common proxy-inactive repair flow (May 1, 2026)
+
+Observed common failure mode in lab runs:
+
+- Local services were healthy on `45456`, `45457`, `45458`, and `45459`.
+- Proxy listener `8000` was closed.
+- `GET /automation/health` on `45458` succeeded.
+- `GET /export/output-status` on `45459` succeeded.
+
+Operator repair path is now documented and scripted via:
+
+- `lab-addon/scripts/qidian-capture-repair.ps1`
+
+The script performs one detection pass and (when prerequisites are healthy and proxy is closed) exactly one `start-headless` call, then rechecks proxy status and export status.
+
+If `start-headless` fails with `Failed to connect to admin server at http://127.0.0.1:45456`, treat this as official admin server unreachable and restart the official server process before retrying.
+
+Final capture proof remains unchanged: JSONL growth plus Qidian target URL hits.
