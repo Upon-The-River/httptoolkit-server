@@ -6,6 +6,10 @@ export interface RawCapturedRecord {
     schemaVersion?: number;
     recordId?: string;
     observedAt?: string;
+    ingestedAt?: string;
+    capturedAt?: string;
+    sourceObservedAt?: string;
+    observedAtWallClockInvalid?: boolean;
     method?: string;
     url?: string;
     statusCode?: number;
@@ -16,6 +20,12 @@ export interface RawCapturedRecord {
     };
     matchedTarget?: string;
 }
+const isValidWallClockDate = (value: string | undefined): boolean => {
+    if (!value) return false;
+    const ms = Date.parse(value);
+    if (Number.isNaN(ms)) return false;
+    return new Date(ms).getUTCFullYear() >= 2001;
+};
 
 const MOJIBAKE_MARKERS = ['涓', '涔', '鎴', '绾', '鐨', '鍙', '鏄', '浣', '妯', '闂', '锛', '銆', '€', '�'];
 
@@ -54,7 +64,14 @@ export function repairMojibakeText(input: string): {
 
 export function normalizeNetworkEvent(record: RawCapturedRecord, includeSamples = false) {
     const method = (record.method ?? 'GET').toUpperCase();
-    const observedAt = record.observedAt ?? new Date(0).toISOString();
+    const observedAt = record.observedAt;
+    const observedAtWallClockInvalid = typeof record.observedAtWallClockInvalid === 'boolean'
+        ? record.observedAtWallClockInvalid
+        : !isValidWallClockDate(observedAt);
+    const eventTimeForSorting = record.ingestedAt
+        ?? record.capturedAt
+        ?? (isValidWallClockDate(observedAt) ? observedAt : undefined)
+        ?? new Date(0).toISOString();
     const url = record.url ?? '';
     const routed = routeQidianEndpoint(url);
     const bodyInline = typeof record.body?.inline === 'string' ? record.body.inline : undefined;
@@ -97,6 +114,10 @@ export function normalizeNetworkEvent(record: RawCapturedRecord, includeSamples 
         schemaVersion: 1,
         sourceRecordId: record.recordId ?? '',
         observedAt,
+        ingestedAt: record.ingestedAt,
+        sourceObservedAt: record.sourceObservedAt,
+        observedAtWallClockInvalid,
+        eventTimeForSorting,
         method,
         url,
         host: routed.host,

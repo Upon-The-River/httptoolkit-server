@@ -478,3 +478,14 @@ Notes:
 
 - qidian capture wrappers rely on `/export/output-status` for live jsonl path discovery (no hardcoded runtime export path for capture state).
 - This is addon-only behavior; official core Android activation/interceptor flows are unchanged.
+
+## Qidian long-running capture reliability notes (May 1, 2026)
+
+- Source `observedAt` values from captured payloads may be relative timing converted to epoch-like values (for example `1970-01-01T00:21:36.922Z`) and must not be treated as wall-clock freshness.
+- Export ingest now writes PC-side `ingestedAt` wall-clock timestamps and flags `observedAtWallClockInvalid=true` when source `observedAt` is missing/invalid or has year `< 2001`.
+- Normalization should use `eventTimeForSorting` for freshness/sorting. Priority order is `ingestedAt`, then `capturedAt`, then valid wall-clock `observedAt`.
+- Watchdog mode uses JSONL growth + appended-hit inspection and can auto-attempt one light `start-headless` activation after no-growth threshold.
+- Auto-activation is cooldown-limited; repeated no-growth does not spam calls inside cooldown.
+- `EADDRINUSE` during auto-activation is treated as `existing-session-possible` warning, not fatal.
+- Phone-network (`adb shell ping 223.5.5.5`) failures are surfaced separately and should not trigger endless activation retries.
+- No-growth alone can still be idle app behavior; in capture-active mode this is treated as a lightweight recovery signal.

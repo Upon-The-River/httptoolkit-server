@@ -36,6 +36,13 @@ const getStableRecordId = (event: SyntheticHttpEvent, observedAt: string): strin
         .slice(0, 16);
 };
 
+const isWallClockObservedAt = (value: string | undefined): boolean => {
+    if (!value) return false;
+    const timestamp = Date.parse(value);
+    if (Number.isNaN(timestamp)) return false;
+    return new Date(timestamp).getUTCFullYear() >= 2001;
+};
+
 export interface ExportIngestResult {
     record: NormalizedExportRecord;
     match: ExportMatchResult;
@@ -60,13 +67,19 @@ export class ExportIngestService {
     }
 
     normalize(event: SyntheticHttpEvent, matchResult: ExportMatchResult = this.match(event)): NormalizedExportRecord {
-        const observedAt = event.observedAt ?? event.timestamp ?? new Date().toISOString();
+        const sourceObservedAt = event.observedAt ?? event.timestamp;
+        const observedAt = sourceObservedAt ?? new Date().toISOString();
+        const observedAtWallClockInvalid = !isWallClockObservedAt(sourceObservedAt);
+        const ingestedAt = new Date().toISOString();
         const body = getEventBody(event);
 
         return {
             schemaVersion: 1,
             recordId: getStableRecordId(event, observedAt),
             observedAt,
+            sourceObservedAt,
+            observedAtWallClockInvalid,
+            ingestedAt,
             method: event.method.toUpperCase(),
             url: event.url,
             statusCode: event.statusCode,
@@ -76,7 +89,7 @@ export class ExportIngestService {
                 encoding: body.encoding
             },
             matchedTarget: matchResult.targetName
-        };
+        } as NormalizedExportRecord;
     }
 
     ingest(event: SyntheticHttpEvent, options: { persist?: boolean } = {}): ExportIngestResult {
