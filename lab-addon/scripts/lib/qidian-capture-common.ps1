@@ -83,6 +83,43 @@ function Invoke-QidianStartHeadlessOnce {
     return [pscustomobject]$result
 }
 
+function Restart-QidianHtkAndroidApp {
+    param(
+        [string]$AddonBaseUrl,
+        [string]$DeviceId,
+        [string]$HtkPackage = 'tech.httptoolkit.android.v1',
+        [int]$ProxyPort = 8000,
+        [int]$TimeoutSec = 5
+    )
+
+    $result = [ordered]@{
+        forceStopAttempted = $false
+        forceStopOk = $false
+        forceStopSummary = $null
+        startHeadlessResponseSummary = $null
+        warning = $null
+        errorReason = $null
+    }
+
+    try {
+        $result.forceStopAttempted = $true
+        $output = (& adb -s $DeviceId shell am force-stop $HtkPackage 2>&1)
+        $result.forceStopSummary = (($output -join "`n").Trim())
+        $result.forceStopOk = $true
+    }
+    catch {
+        $result.errorReason = "adb-force-stop-failed: $($_.Exception.Message)"
+        return [pscustomobject]$result
+    }
+
+    Start-Sleep -Seconds 3
+    $startResult = Invoke-QidianStartHeadlessOnce -AddonBaseUrl $AddonBaseUrl -DeviceId $DeviceId -ProxyPort $ProxyPort -TimeoutSec $TimeoutSec
+    $result.startHeadlessResponseSummary = $startResult.responseSummary
+    if ($startResult.warning) { $result.warning = $startResult.warning }
+    if ($startResult.errorReason) { $result.errorReason = $startResult.errorReason }
+    return [pscustomobject]$result
+}
+
 function Write-QidianRepairLog {
     param([string]$LogPath, [object]$Result)
     New-QidianCaptureRuntimeDir -Path $LogPath

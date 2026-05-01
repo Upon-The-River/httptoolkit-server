@@ -17,7 +17,8 @@ $ErrorActionPreference = 'Stop'
 Set-QidianCaptureUtf8
 
 if (-not [System.IO.Path]::IsPathRooted($ExportDir)) {
-    $ExportDir = (Resolve-Path -LiteralPath $ExportDir -ErrorAction SilentlyContinue)?.Path ?? (Join-Path (Get-Location).Path $ExportDir)
+    $resolved = Resolve-Path -LiteralPath $ExportDir -ErrorAction SilentlyContinue
+    if ($resolved) { $ExportDir = $resolved.Path } else { $ExportDir = Join-Path (Get-Location).Path $ExportDir }
 }
 New-Item -ItemType Directory -Path $ExportDir -Force | Out-Null
 if (-not $ReportPath) { $ReportPath = Join-Path $ExportDir 'repair_report.json' }
