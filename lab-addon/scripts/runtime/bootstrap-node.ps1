@@ -4,8 +4,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$targetDir = Join-Path $repoRoot "runtime/node/win32-x64"
+$labRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$targetDir = Join-Path $labRoot "runtime/node/win32-x64"
 $targetExe = Join-Path $targetDir "node.exe"
 if (Test-Path $targetDir) {
   Remove-Item -Path $targetDir -Recurse -Force
