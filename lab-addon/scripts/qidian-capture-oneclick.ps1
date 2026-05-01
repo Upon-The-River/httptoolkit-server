@@ -17,6 +17,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $startedAt = (Get-Date).ToString('o')
 $exitCode = 0
 $fatalError = $null
@@ -32,6 +33,8 @@ if (-not [System.IO.Path]::IsPathRooted($OneClickReportPath)) { $OneClickReportP
 
 $captureDir = Split-Path -Parent $OneClickReportPath
 New-Item -ItemType Directory -Path $captureDir -Force | Out-Null
+$serverStdoutLog = Join-Path $captureDir 'lab_addon_server.stdout.log'
+$serverStderrLog = Join-Path $captureDir 'lab_addon_server.stderr.log'
 
 $labAddonStartedByOneClick = $false
 $labAddonPid = $null
@@ -40,9 +43,9 @@ $bridgeHealthOk = $false
 $jsonlPath = $null
 $exportsRoot = $null
 $baselineBytes = $null
-$startHeadlessResult = 'not-run'
+$startResult = 'not-run'
 $watchResult = if ($NoWatch) { 'skipped' } else { 'not-run' }
-$sampleTargetUrls = @()
+$failureReason = $null
 
 try {
   $adbCmd = Get-Command adb -ErrorAction SilentlyContinue
@@ -59,9 +62,8 @@ try {
     $addonHealthOk = [bool]$addonHealth.ok
   }
   catch {
-    $stdoutLog = Join-Path $captureDir 'lab_addon_server.stdout.log'
-    $stderrLog = Join-Path $captureDir 'lab_addon_server.stderr.log'
-    $serverProcess = Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $labRoot 'scripts/runtime/run-server.ps1')) -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+    $runServerScript = Join-Path $labRoot 'scripts/runtime/run-server.ps1'
+    $serverProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$runServerScript) -RedirectStandardOutput $serverStdoutLog -RedirectStandardError $serverStderrLog -PassThru -WindowStyle Minimized
     $labAddonStartedByOneClick = $true
     $labAddonPid = $serverProcess.Id
   }
@@ -78,7 +80,11 @@ try {
   }
 
   if (-not $addonHealthOk) {
-    throw "Addon health check timed out after $StartupTimeoutSeconds seconds. Check runtime/capture/lab_addon_server.stdout.log and runtime/capture/lab_addon_server.stderr.log"
+    $failureReason = "Addon health check timed out after $StartupTimeoutSeconds seconds."
+    Write-Host "Check logs: $serverStdoutLog"
+    Write-Host "Check logs: $serverStderrLog"
+    $exitCode = 1
+    throw $failureReason
   }
 
   try {
@@ -90,49 +96,52 @@ try {
   }
 
   if (-not $bridgeHealthOk) {
+    $failureReason = "official Android activation bridge unavailable at $BridgeBaseUrl/automation/health (expected 45458)."
     $exitCode = 1
-    throw "official Android activation bridge unavailable: $BridgeBaseUrl/automation/health (expected port 45458)."
+    throw $failureReason
   }
 
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $labRoot 'scripts/qidian-capture-start.ps1') -AddonBaseUrl $AddonBaseUrl -BridgeBaseUrl $BridgeBaseUrl -DeviceId $DeviceId -ProxyPort $ProxyPort -StatePath $StatePath -ReportPath $ReportPath @($ClearJsonl.IsPresent ? '-ClearJsonl' : @()) @($SkipSmoke.IsPresent ? '-SkipSmoke' : @())
+  $startScript = Join-Path $labRoot 'scripts/qidian-capture-start.ps1'
+  $startArgs = @('-AddonBaseUrl',$AddonBaseUrl,'-BridgeBaseUrl',$BridgeBaseUrl,'-DeviceId',$DeviceId,'-ProxyPort',"$ProxyPort",'-StatePath',$StatePath,'-ReportPath',$ReportPath)
+  if ($ClearJsonl.IsPresent) { $startArgs += '-ClearJsonl' }
+  if ($SkipSmoke.IsPresent) { $startArgs += '-SkipSmoke' }
+
+  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $startScript @startArgs
   if ($LASTEXITCODE -ne 0) {
-    $startHeadlessResult = "failed($LASTEXITCODE)"
-    $exitCode = if ($exitCode -eq 0) { $LASTEXITCODE } else { $exitCode }
-    throw "qidian-capture-start.ps1 failed with exit code $LASTEXITCODE"
+    $startResult = "failed($LASTEXITCODE)"
+    $failureReason = "qidian-capture-start.ps1 failed with exit code $LASTEXITCODE"
+    $exitCode = 1
+    throw $failureReason
   }
-  $startHeadlessResult = 'ok'
+  $startResult = 'ok'
 
   $status = Get-QidianExportStatus -AddonBaseUrl $AddonBaseUrl
   $jsonlPath = [string]$status.jsonlPath
   $baselineBytes = [int64]$status.sizeBytes
   $exportsRoot = if ($jsonlPath) { Split-Path -Parent $jsonlPath } else { $null }
 
-  Write-Host "AddonBaseUrl: $AddonBaseUrl"
-  Write-Host "BridgeBaseUrl: $BridgeBaseUrl"
-  Write-Host "DeviceId: $DeviceId"
   Write-Host "jsonlPath: $jsonlPath"
-  Write-Host "current sizeBytes: $baselineBytes"
   Write-Host "exportsRoot: $exportsRoot"
 
   if (-not $NoWatch) {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $labRoot 'scripts/qidian-capture-watch.ps1') -StatePath $StatePath -TimeoutSeconds $WatchTimeoutSeconds -PollSeconds $PollSeconds -Pattern $Pattern -ReportPath $ReportPath
+    $watchScript = Join-Path $labRoot 'scripts/qidian-capture-watch.ps1'
+    $watchArgs = @('-StatePath',$StatePath,'-TimeoutSeconds',"$WatchTimeoutSeconds",'-PollSeconds',"$PollSeconds",'-Pattern',$Pattern,'-ReportPath',$ReportPath)
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $watchScript @watchArgs
     if ($LASTEXITCODE -eq 0) {
       $watchResult = 'ok'
-      $watchReport = Get-Content -LiteralPath $ReportPath -Raw -ErrorAction SilentlyContinue
-      if ($watchReport) {
-        $sampleTargetUrls = @(($watchReport -split "`r?`n") | Where-Object { $_ -match '^\s*-\s+https?://' } | ForEach-Object { $_ -replace '^\s*-\s+', '' } | Select-Object -First 10)
-      }
       $exitCode = 0
     }
     else {
       $watchResult = "failed($LASTEXITCODE)"
+      $failureReason = 'watch timeout/no target hit'
       $exitCode = 2
-      Write-Warning 'watch timeout/no target hit. Open Qidian book detail/catalog/ranking pages to trigger traffic, then rerun watch.'
+      Write-Warning 'Open Qidian app book detail/catalog/ranking pages to trigger traffic, then rerun watch.'
     }
   }
 }
 catch {
-  $fatalError = $_.Exception.Message
+  if (-not $failureReason) { $failureReason = $_.Exception.Message }
+  $fatalError = $failureReason
   if ($exitCode -eq 0) { $exitCode = 1 }
 }
 finally {
@@ -163,22 +172,15 @@ finally {
     "- exportsRoot: $exportsRoot",
     "- baselineBytes: $baselineBytes",
     "- clearJsonl: $($ClearJsonl.IsPresent)",
-    "- startHeadlessResult: $startHeadlessResult",
-    "- watchResult: $watchResult"
-  )
-
-  if ($sampleTargetUrls.Count -gt 0) {
-    $lines += '- sampleTargetUrls:'
-    foreach ($url in $sampleTargetUrls) { $lines += "  - $url" }
-  }
-
-  if ($fatalError) { $lines += "- error: $fatalError" }
-
-  $lines += @(
+    "- startResult: $startResult",
+    "- watchResult: $watchResult",
+    "- failureReason: $failureReason",
+    "- serverStdoutLog: $serverStdoutLog",
+    "- serverStderrLog: $serverStderrLog",
     '- recommended Meta args:',
-    '  --capture-backend httptoolkit',
-    '  --httptoolkit-source exports_file',
-    "  --httptoolkit-exports-root \"$exportsRoot\""
+    '  --capture-backend httptoolkit `',
+    '  --httptoolkit-source exports_file `',
+    ('  --httptoolkit-exports-root "' + $exportsRoot + '"')
   )
 
   Write-QidianCaptureReport -Path $OneClickReportPath -Lines $lines
@@ -186,7 +188,7 @@ finally {
   Write-Host ''
   Write-Host '--capture-backend httptoolkit `'
   Write-Host '--httptoolkit-source exports_file `'
-  Write-Host "--httptoolkit-exports-root \"$exportsRoot\""
+  Write-Host ('--httptoolkit-exports-root "' + $exportsRoot + '"')
 
   if ($fatalError) { Write-Error $fatalError }
 }

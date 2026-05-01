@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$AddonBaseUrl = 'http://127.0.0.1:45459',
+    [string]$AddonBaseUrl = 'http://127.0.0.1:45457',
     [string]$BridgeBaseUrl = 'http://127.0.0.1:45458',
     [string]$DeviceId = '23091JEGR04484',
     [int]$ProxyPort = 8000,
@@ -22,7 +22,30 @@ $adbList = & adb devices
 if ($LASTEXITCODE -ne 0) { throw 'adb devices failed.' }
 if (-not ($adbList | Where-Object { $_ -match "^$([regex]::Escape($DeviceId))\s+device$" })) { throw "Device $DeviceId not in adb 'device' state." }
 
-foreach ($port in 45456,45457,45458,45459) { if (-not (Test-QidianPort -Port $port)) { throw "Required port not reachable: $port" } }
+
+function Get-PortFromUrl {
+    param([string]$Url)
+    try {
+        $uri = [Uri]$Url
+        if ($uri.Port -gt 0) { return $uri.Port }
+        if ($uri.Scheme -eq 'https') { return 443 }
+        return 80
+    }
+    catch {
+        throw "Invalid URL: $Url"
+    }
+}
+$addonPort = Get-PortFromUrl $AddonBaseUrl
+$bridgePort = Get-PortFromUrl $BridgeBaseUrl
+
+foreach ($port in @($addonPort, $bridgePort) | Select-Object -Unique) {
+    if (-not (Test-QidianPort -Port $port)) {
+        throw "Required port not reachable: $port"
+    }
+}
+
+Write-Host "Optional diagnostic port 45456: $(Test-QidianPort -Port 45456)"
+Write-Host "Optional diagnostic port 45459: $(Test-QidianPort -Port 45459)"
 
 $addonHealth = Invoke-QidianJson -Method GET -Uri ("{0}/health" -f $AddonBaseUrl.TrimEnd('/'))
 $bridgeHealth = Invoke-QidianJson -Method GET -Uri ("{0}/automation/health" -f $BridgeBaseUrl.TrimEnd('/'))
