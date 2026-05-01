@@ -14,11 +14,19 @@ afterEach(async () => {
 
 describe('normalizeNetworkEvent', () => {
     it('extracts host/path/query and metadata', () => {
-        const event = normalizeNetworkEvent({ method: 'get', url: 'https://druidv6.if.qidian.com/argus/api/v1/booklevel/detail?bookId=1&roleId=2', statusCode: 200, contentType: 'application/json' });
+        const event = normalizeNetworkEvent({ method: 'get', ingestedAt: '2026-05-01T00:00:00.000Z', url: 'https://druidv6.if.qidian.com/argus/api/v1/booklevel/detail?bookId=1&roleId=2', statusCode: 200, contentType: 'application/json' });
         assert.equal(event.host, 'druidv6.if.qidian.com');
         assert.equal(event.path, '/argus/api/v1/booklevel/detail');
         assert.equal(event.query.bookId, '1');
         assert.equal(event.qidian.endpointKey, 'druidv6.argus.booklevel.detail');
+        assert.equal(event.eventTimeForSorting, '2026-05-01T00:00:00.000Z');
+    });
+    it('does not use 1970 observedAt for sorting and marks invalid', () => {
+        const event = normalizeNetworkEvent({ observedAt: '1970-01-01T00:21:36.922Z', ingestedAt: '2026-05-01T01:00:00.000Z', sourceObservedAt: '1970-01-01T00:21:36.922Z', url: 'https://www.qidian.com' });
+        assert.equal(event.observedAt, '1970-01-01T00:21:36.922Z');
+        assert.equal(event.observedAtWallClockInvalid, true);
+        assert.equal(event.sourceObservedAt, '1970-01-01T00:21:36.922Z');
+        assert.equal(event.eventTimeForSorting, '2026-05-01T01:00:00.000Z');
     });
 
     it('detects mojibake and emits warning when repair unavailable', () => {

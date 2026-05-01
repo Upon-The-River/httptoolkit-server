@@ -21,16 +21,23 @@ $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $hitSamples = @()
 $success = $false
 $currentBytes = [int64]$state.baselineBytes
+$lastSeenSize = [int64]$state.baselineBytes
 
 while ((Get-Date) -lt $deadline) {
     $status = Get-QidianExportStatus -AddonBaseUrl $state.addonBaseUrl
     $currentBytes = [int64]$status.sizeBytes
     $delta = $currentBytes - [int64]$state.baselineBytes
-    $hits = Get-QidianTargetHitsSinceOffset -JsonlPath $state.jsonlPath -OffsetBytes ([int64]$state.baselineBytes) -Pattern $Pattern -MaxSamples 10
-    $hitSeen = [bool]$hits.matched
-    if ($hitSeen) { $hitSamples = @($hits.sampleUrls | Select-Object -First 10) }
-
-    Write-Host "[$((Get-Date).ToString('HH:mm:ss'))] baseline=$($state.baselineBytes) current=$currentBytes delta=$delta targetHitSinceBaseline=$hitSeen"
+    $hasNewBytes = $currentBytes -gt $lastSeenSize
+    $hitSeen = $false
+    if ($hasNewBytes) {
+        $hits = Get-QidianTargetHitsSinceOffset -JsonlPath $state.jsonlPath -OffsetBytes $lastSeenSize -Pattern $Pattern -MaxSamples 10
+        $hitSeen = [bool]$hits.matched
+        if ($hitSeen) { $hitSamples = @($hits.sampleUrls | Select-Object -First 10) }
+        Write-Host "[$((Get-Date).ToString('HH:mm:ss'))] baseline=$($state.baselineBytes) current=$currentBytes delta=$delta targetHitInAppend=$hitSeen"
+        $lastSeenSize = $currentBytes
+    } else {
+        Write-Host "[$((Get-Date).ToString('HH:mm:ss'))] sizeBytes=$currentBytes, no new response"
+    }
     if ($currentBytes -gt ([int64]$state.baselineBytes + $MinGrowthBytes) -and $hitSeen) { $success = $true; break }
     Start-Sleep -Seconds $PollSeconds
 }

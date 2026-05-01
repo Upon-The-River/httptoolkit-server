@@ -43,6 +43,7 @@ describe('export ingest service', () => {
         const record = ingestResult.record;
         assert.equal(record.schemaVersion, 1);
         assert.equal(record.observedAt, '2026-01-02T03:04:05.000Z');
+        assert.equal(typeof (record as unknown as { ingestedAt: string }).ingestedAt, 'string');
         assert.equal(record.matchedTarget, 'example-target');
         assert.equal(record.contentType, 'application/json; charset=utf-8');
         assert.equal(record.body.encoding, 'utf8');
@@ -68,6 +69,7 @@ describe('export ingest service', () => {
         });
 
         assert.equal(ingestResult.record.observedAt, '2026-04-27T00:00:00.000Z');
+        assert.equal((ingestResult.record as unknown as { observedAtWallClockInvalid: boolean }).observedAtWallClockInvalid, false);
         assert.equal(ingestResult.record.method, 'POST');
         assert.equal(ingestResult.record.contentType, 'application/octet-stream');
         assert.equal(ingestResult.record.body.encoding, 'base64');
@@ -229,6 +231,18 @@ describe('export ingest service', () => {
         assert.equal(ingestResult.persisted, true);
         assert.equal(ingestResult.record.matchedTarget, 'core-hook-target');
         assert.equal(sink.readRecordsForTests().length, 1);
+    });
+
+    it('marks 1970 observedAt as invalid wall-clock and preserves source timestamp', async () => {
+        const runtimeRoot = await createTempRuntimeRoot();
+        const sink = new ExportFileSink({ runtimeRoot });
+        const ingestService = new ExportIngestService([{ name: 'target', methods: ['GET'], urlIncludes: ['example.com'], statusCodes: [200] }], sink);
+        ingestService.ingest({ observedAt: '1970-01-01T00:21:36.922Z', method: 'GET', url: 'https://example.com/qidian', statusCode: 200 }, { persist: true });
+        const [persisted] = sink.readRecordsForTests() as Array<Record<string, unknown>>;
+        assert.equal(persisted.sourceObservedAt, '1970-01-01T00:21:36.922Z');
+        assert.equal(persisted.observedAtWallClockInvalid, true);
+        assert.equal(typeof persisted.ingestedAt, 'string');
+        assert.equal(new Date(String(persisted.ingestedAt)).getUTCFullYear() >= 2026, true);
     });
 
     it('does not persist when persist=false or omitted', async () => {
