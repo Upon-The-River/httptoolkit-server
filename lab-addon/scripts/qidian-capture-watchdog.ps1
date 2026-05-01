@@ -62,6 +62,7 @@ function Write-WatchdogAlert {
 
 while ($true) {
     $checkedAt = Get-Date
+    $recoveryActionTakenThisPoll = $false
     $ports = @{}
     foreach ($p in $portsToCheck) { $ports["$p"] = Test-QidianPort -Port $p }
     $addonHealthOk = $false; $bridgeHealthOk = $false; $exportStatusOk = $false; $status = $null
@@ -124,6 +125,7 @@ while ($true) {
       $startResult = Invoke-QidianStartHeadlessOnce -AddonBaseUrl $AddonBaseUrl -DeviceId $DeviceId -ProxyPort $ProxyPort
       $lastActivationResult = $startResult.responseSummary
       $lastRecoveryAction = 'activate-start-headless-once'
+      $recoveryActionTakenThisPoll = $true
       if ($startResult.warning -eq 'eaddrinuse-existing-session-possible') {
         [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-warning-eaddrinuse' -Message 'Start-headless returned EADDRINUSE; existing session may still be active')
       } elseif ($startResult.errorReason -eq 'official-admin-server-unreachable') {
@@ -135,12 +137,16 @@ while ($true) {
       }
     }
 
-    $shouldRestartHtk = $AutoRestartHtk -and $activationPrereqsOk -and ($secondsSinceGrowth -ge $NoGrowthRestartHtkSeconds) -and (-not $lastHtkRestartAt -or $secondsSinceHtkRestart -ge $HtkRestartCooldownSeconds)
+    $lightActivationAlreadyTried = $null -ne $lastActivateAt
+    $activationObservationElapsed = ($null -ne $lastActivateAt) -and (($checkedAt - $lastActivateAt).TotalSeconds -ge $PollSeconds)
+    $htkRestartCooldownElapsed = (-not $lastHtkRestartAt) -or $secondsSinceHtkRestart -ge $HtkRestartCooldownSeconds
+    $shouldRestartHtk = $AutoRestartHtk -and $activationPrereqsOk -and ($secondsSinceGrowth -ge $NoGrowthRestartHtkSeconds) -and $lightActivationAlreadyTried -and $activationObservationElapsed -and $htkRestartCooldownElapsed
     if ($phonePingIpOk -eq $false) { $shouldRestartHtk = $false }
-    if ($shouldRestartHtk) {
+    if (-not $recoveryActionTakenThisPoll -and $shouldRestartHtk) {
       $restartResult = Restart-QidianHtkAndroidApp -AddonBaseUrl $AddonBaseUrl -DeviceId $DeviceId -HtkPackage $HtkPackage -ProxyPort $ProxyPort
       $lastHtkRestartAt = $checkedAt
       $lastRecoveryAction = 'restart-htk-android'
+      $recoveryActionTakenThisPoll = $true
       $lastActivationResult = $restartResult.startHeadlessResponseSummary
       if ($restartResult.warning -eq 'eaddrinuse-existing-session-possible') {
         [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'htk-restart-warning-eaddrinuse' -Message 'HTK Android restart start-headless returned EADDRINUSE; existing session may still be active')

@@ -259,6 +259,27 @@ Real-device runs now confirm the official core bridge control-plane path is heal
 
 ## Android start-headless idempotency fix on repeated proxyPort (April 29, 2026)
 
+## Watchdog staged recovery ordering for Android freeze point (May 1, 2026)
+
+Known phone-side freeze point remains the HTTP Toolkit Android app / VPN data-plane stage, even when control-plane activation succeeded.
+
+Watchdog recovery order is now explicitly staged:
+
+1. At `NoGrowthActivateSeconds`, watchdog sends one light `start-headless` activation attempt.
+2. If growth still does not resume in later polls, and restart threshold/cooldowns are satisfied, watchdog performs HTK Android package restart + one `start-headless`.
+3. Qidian app restart remains non-default and is not part of this default watchdog path.
+
+Guardrail added: light activation and HTK Android restart must not run in the same poll cycle.
+
+- Poll-local flag: `recoveryActionTakenThisPoll`.
+- HTK restart runs only when no prior recovery action was taken in that same poll.
+- HTK restart additionally requires a prior activation attempt and at least one poll observation window since that activation.
+
+PowerShell parameter note:
+
+- `AutoRestartHtk` remains a `[bool]` defaulting to `$true`.
+- Use `-AutoRestartHtk:$true` / `-AutoRestartHtk:$false`, or omit to keep default `true`.
+
 ## Watchdog long-running hardening notes (May 1, 2026)
 
 - `NoGrowthActivateSeconds` remains tunable:
