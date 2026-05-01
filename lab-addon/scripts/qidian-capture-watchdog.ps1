@@ -59,9 +59,16 @@ while ($true) {
     $ports = @{}
     foreach ($p in $portsToCheck) { $ports["$p"] = Test-QidianPort -Port $p }
     $addonHealthOk = $false; $bridgeHealthOk = $false; $exportStatusOk = $false; $status = $null
-    try { $addonHealthOk = [bool](Invoke-QidianJson -Method GET -Uri ("{0}/health" -f $AddonBaseUrl.TrimEnd('/'))) } catch {}
-    try { $bridgeHealthOk = [bool](Invoke-QidianJson -Method GET -Uri ("{0}/automation/health" -f $BridgeBaseUrl.TrimEnd('/'))) } catch {}
+    try {
+      $addonHealth = Invoke-QidianJson -Method GET -Uri ("{0}/health" -f $AddonBaseUrl.TrimEnd('/'))
+      $addonHealthOk = ($addonHealth.ok -eq $true)
+    } catch {}
+    try {
+      $bridgeHealth = Invoke-QidianJson -Method GET -Uri ("{0}/automation/health" -f $BridgeBaseUrl.TrimEnd('/'))
+      $bridgeHealthOk = ($bridgeHealth.success -eq $true)
+    } catch {}
     try { $status = Get-QidianExportStatus -AddonBaseUrl $AddonBaseUrl; $exportStatusOk = $true } catch {}
+    if ($status -and $status.jsonlPath) { $jsonlPath = [string]$status.jsonlPath }
     $jsonlSizeBytes = if ($status) { [int64]$status.sizeBytes } elseif (Test-Path $jsonlPath) { (Get-Item $jsonlPath).Length } else { 0 }
     $adbOk = $false
     try { $adbOk = ((& adb -s $DeviceId get-state 2>$null) -match 'device') } catch {}
@@ -134,7 +141,7 @@ while ($true) {
       lastActivateAt = if ($lastActivateAt) { $lastActivateAt.ToString('o') } else { $null };
       secondsSinceActivate = $secondsSinceActivate; adbOk = $adbOk; phonePingIpOk = $phonePingIpOk; phonePingDnsOk = $phonePingDnsOk;
       autoActivateEnabled = $AutoActivate; noGrowthActivateSeconds = $NoGrowthActivateSeconds; activationCooldownSeconds = $ActivationCooldownSeconds; alertCooldownSeconds = $AlertCooldownSeconds;
-      lastActivationResult = $lastActivationResult; activeAlerts = @($lastAlertsByKey.Keys | Sort-Object); lastAlert = $lastAlert
+      lastActivationResult = $lastActivationResult; alertHistoryKeys = @($lastAlertsByKey.Keys | Sort-Object); lastAlert = $lastAlert
     }
     $statusObj | ConvertTo-Json -Depth 6 | Set-Content -Path $StatusPath -Encoding utf8
     Start-Sleep -Seconds $PollSeconds

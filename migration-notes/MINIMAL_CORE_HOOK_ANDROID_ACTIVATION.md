@@ -495,7 +495,9 @@ Notes:
 - Export ingest now writes PC-side `ingestedAt` wall-clock timestamps and flags `observedAtWallClockInvalid=true` when source `observedAt` is missing/invalid or has year `< 2001`.
 - Normalization should use `eventTimeForSorting` for freshness/sorting. Priority order is `ingestedAt`, then `capturedAt`, then valid wall-clock `observedAt`.
 - Watchdog mode uses JSONL growth + appended-hit inspection and can auto-attempt one light `start-headless` activation after no-growth threshold.
+- Watchdog health flags are strict field checks: `addonHealthOk` requires `/health` response `ok=true`; `bridgeHealthOk` requires `/automation/health` response `success=true`.
 - Auto-activation is cooldown-limited; repeated no-growth does not spam calls inside cooldown.
 - `EADDRINUSE` during auto-activation is treated as `existing-session-possible` warning, not fatal.
 - Phone-network (`adb shell ping 223.5.5.5`) failures are surfaced separately and should not trigger endless activation retries.
 - No-growth alone can still be idle app behavior; in capture-active mode this is treated as a lightweight recovery signal.
+- Watchdog status now reports `alertHistoryKeys` (seen-during-process-lifetime keys) to avoid confusion with currently-active alerts.
