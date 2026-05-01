@@ -11,16 +11,17 @@ function Invoke-QidianJson {
     param(
         [ValidateSet('GET', 'POST')][string]$Method,
         [Parameter(Mandatory = $true)][string]$Uri,
-        [object]$Body
+        [object]$Body,
+        [int]$TimeoutSec = 5
     )
 
     try {
         if ($Method -eq 'GET') {
-            return Invoke-RestMethod -Method Get -Uri $Uri
+            return Invoke-RestMethod -Method Get -Uri $Uri -TimeoutSec $TimeoutSec
         }
 
         $json = if ($null -ne $Body) { $Body | ConvertTo-Json -Depth 20 } else { '{}' }
-        return Invoke-RestMethod -Method Post -Uri $Uri -ContentType 'application/json' -Body $json
+        return Invoke-RestMethod -Method Post -Uri $Uri -ContentType 'application/json' -Body $json -TimeoutSec $TimeoutSec
     }
     catch {
         $errorText = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
@@ -38,9 +39,58 @@ function Test-QidianPort {
 }
 
 function Get-QidianExportStatus {
-    param([string]$AddonBaseUrl)
-    return Invoke-QidianJson -Method GET -Uri ("{0}/export/output-status" -f $AddonBaseUrl.TrimEnd('/'))
+    param([string]$AddonBaseUrl, [int]$TimeoutSec = 5)
+    return Invoke-QidianJson -Method GET -Uri ("{0}/export/output-status" -f $AddonBaseUrl.TrimEnd('/')) -TimeoutSec $TimeoutSec
 }
+
+function Invoke-QidianStartHeadlessOnce {
+    param(
+        [string]$AddonBaseUrl,
+        [string]$DeviceId,
+        [int]$ProxyPort = 8000,
+        [int]$TimeoutSec = 5
+    )
+
+    $uri = "{0}/automation/android-adb/start-headless" -f $AddonBaseUrl.TrimEnd('/')
+    $body = @{
+        deviceId = $DeviceId
+        proxyPort = $ProxyPort
+        allowUnsafeStart = $true
+        enableSocks = $false
+        waitForTraffic = $false
+        waitForTargetTraffic = $false
+    }
+
+    $result = [ordered]@{ responseSummary = $null; warning = $null; errorReason = $null }
+    try {
+        $resp = Invoke-QidianJson -Method POST -Uri $uri -Body $body -TimeoutSec $TimeoutSec
+        $result.responseSummary = $resp | ConvertTo-Json -Compress
+    }
+    catch {
+        $msg = $_.Exception.Message
+        $result.responseSummary = $msg
+        if ($msg -match 'EADDRINUSE') {
+            $result.warning = 'eaddrinuse-existing-session-possible'
+        }
+        elseif ($msg -match 'Failed to connect to admin server at http://127\.0\.0\.1:45456') {
+            $result.errorReason = 'official-admin-server-unreachable'
+        }
+        else {
+            $result.errorReason = $msg
+        }
+    }
+
+    return [pscustomobject]$result
+}
+
+function Write-QidianRepairLog {
+    param([string]$LogPath, [object]$Result)
+    New-QidianCaptureRuntimeDir -Path $LogPath
+    $line = "[{0}] verdict={1} repairNeeded={2} repairAttempted={3} proxyBefore={4} proxyAfter={5} reason={6} warning={7} failed={8}" -f `
+        $Result.checkedAt, $Result.verdict, $Result.repairNeeded, $Result.repairAttempted, $Result.proxyPortOpenBefore, $Result.proxyPortOpenAfter, $Result.repairReason, $Result.repairWarning, $Result.repairFailedReason
+    Add-Content -LiteralPath $LogPath -Value $line -Encoding utf8
+}
+
 
 function Format-QidianShortLine {
     param([string]$Line)
