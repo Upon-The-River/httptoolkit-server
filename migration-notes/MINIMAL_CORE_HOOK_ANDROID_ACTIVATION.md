@@ -259,6 +259,16 @@ Real-device runs now confirm the official core bridge control-plane path is heal
 
 ## Android start-headless idempotency fix on repeated proxyPort (April 29, 2026)
 
+## Watchdog long-running hardening notes (May 1, 2026)
+
+- `NoGrowthActivateSeconds` remains tunable:
+  - `60` seconds for aggressive recovery.
+  - `120-300` seconds for quieter long-run operation.
+- `ActivationCooldownSeconds` prevents repeated `start-headless` retries/spam while a session is already being recovered.
+- Port `8000` down is warning-only in the watchdog path; JSONL growth is treated as the real capture proof.
+- Phone and service failures (`adb`, phone ping IP/DNS, addon health, bridge health, export status, critical ports `45458/45459`) are alerted immediately with alert-key cooldown, and do not trigger endless activation attempts.
+- `observedAt` from source data may be 1970-like/invalid; long-run operators should rely on `ingestedAt` and `eventTimeForSorting` when interpreting timeline order.
+
 ### Real run result captured
 
 - First `POST /automation/android-adb/start-headless` on `proxyPort=8000` succeeded with:
