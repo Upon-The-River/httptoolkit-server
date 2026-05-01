@@ -1,7 +1,7 @@
 @echo off
 setlocal
 set VERSION=22.20.0
-set ROOT=%~dp0..
+set ROOT=%~dp0..\..
 set NODE_DIR=%ROOT%\runtime\node\win32-x64
 set NODE_EXE=%NODE_DIR%\node.exe
 

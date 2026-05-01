@@ -1,9 +1,9 @@
 $ErrorActionPreference = "Continue"
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$embeddedNode = Join-Path $repoRoot "runtime/node/win32-x64/node.exe"
-$packageJson = Join-Path $repoRoot "package.json"
-$nvmrcPath = Join-Path $repoRoot ".nvmrc"
+$labRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$embeddedNode = Join-Path $labRoot "runtime/node/win32-x64/node.exe"
+$packageJson = Join-Path $labRoot "package.json"
+$nvmrcPath = Join-Path $labRoot ".nvmrc"
 
 $enginesNode = (Get-Content $packageJson -Raw | ConvertFrom-Json).engines.node
 $nvmrc = if (Test-Path $nvmrcPath) { (Get-Content $nvmrcPath -Raw).Trim() } else { "<missing>" }
