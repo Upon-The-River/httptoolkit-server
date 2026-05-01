@@ -37,6 +37,10 @@ $lastActivationResult = 'none'
 $lastRecoveryAction = 'none'
 $lastAlert = $null
 $lastAlertsByKey = @{}
+$currentStallStartedAt = $null
+$currentStallId = 0
+$lightActivationAttemptedForCurrentStall = $false
+$htkRestartAttemptedForCurrentStall = $false
 
 function Write-WatchdogAlert {
     param(
@@ -106,7 +110,16 @@ while ($true) {
         Write-Host "[$($checkedAt.ToString('HH:mm:ss'))] sizeBytes=$jsonlSizeBytes appended no target hit"
       }
       $lastSize = $jsonlSizeBytes
+      $currentStallStartedAt = $null
+      $lightActivationAttemptedForCurrentStall = $false
+      $htkRestartAttemptedForCurrentStall = $false
     } else {
+      if ($null -eq $currentStallStartedAt) {
+        $currentStallStartedAt = $checkedAt
+        $currentStallId += 1
+        $lightActivationAttemptedForCurrentStall = $false
+        $htkRestartAttemptedForCurrentStall = $false
+      }
       Write-Host "[$($checkedAt.ToString('HH:mm:ss'))] sizeBytes=$jsonlSizeBytes, no new response"
     }
 
@@ -118,13 +131,14 @@ while ($true) {
     }
     $activationPrereqsOk = $adbOk -and $phonePingIpOk -and $addonHealthOk -and $bridgeHealthOk -and $exportStatusOk
     $repairTrigger = (-not $proxyPortOpen -and $addonHealthOk -and $bridgeHealthOk -and $exportStatusOk) -or ($secondsSinceGrowth -ge $NoGrowthActivateSeconds)
-    $shouldActivate = $AutoActivate -and $activationPrereqsOk -and $repairTrigger -and (-not $lastActivateAt -or $secondsSinceActivate -ge $ActivationCooldownSeconds)
+    $shouldActivate = $AutoActivate -and $activationPrereqsOk -and $repairTrigger -and (-not $lastActivateAt -or $secondsSinceActivate -ge $ActivationCooldownSeconds) -and (-not $lightActivationAttemptedForCurrentStall) -and (-not $recoveryActionTakenThisPoll)
 
     if ($shouldActivate) {
       $lastActivateAt = $checkedAt
       $startResult = Invoke-QidianStartHeadlessOnce -AddonBaseUrl $AddonBaseUrl -DeviceId $DeviceId -ProxyPort $ProxyPort
       $lastActivationResult = $startResult.responseSummary
-      $lastRecoveryAction = 'activate-start-headless-once'
+      $lastRecoveryAction = 'start-headless-activation'
+      $lightActivationAttemptedForCurrentStall = $true
       $recoveryActionTakenThisPoll = $true
       if ($startResult.warning -eq 'eaddrinuse-existing-session-possible') {
         [void](Write-WatchdogAlert -CheckedAt $checkedAt -AlertKey 'activation-warning-eaddrinuse' -Message 'Start-headless returned EADDRINUSE; existing session may still be active')
@@ -137,15 +151,14 @@ while ($true) {
       }
     }
 
-    $lightActivationAlreadyTried = $null -ne $lastActivateAt
-    $activationObservationElapsed = ($null -ne $lastActivateAt) -and (($checkedAt - $lastActivateAt).TotalSeconds -ge $PollSeconds)
     $htkRestartCooldownElapsed = (-not $lastHtkRestartAt) -or $secondsSinceHtkRestart -ge $HtkRestartCooldownSeconds
-    $shouldRestartHtk = $AutoRestartHtk -and $activationPrereqsOk -and ($secondsSinceGrowth -ge $NoGrowthRestartHtkSeconds) -and $lightActivationAlreadyTried -and $activationObservationElapsed -and $htkRestartCooldownElapsed
+    $shouldRestartHtk = $AutoRestartHtk -and $activationPrereqsOk -and ($secondsSinceGrowth -ge $NoGrowthRestartHtkSeconds) -and $lightActivationAttemptedForCurrentStall -and (-not $htkRestartAttemptedForCurrentStall) -and $htkRestartCooldownElapsed -and (-not $recoveryActionTakenThisPoll)
     if ($phonePingIpOk -eq $false) { $shouldRestartHtk = $false }
     if (-not $recoveryActionTakenThisPoll -and $shouldRestartHtk) {
       $restartResult = Restart-QidianHtkAndroidApp -AddonBaseUrl $AddonBaseUrl -DeviceId $DeviceId -HtkPackage $HtkPackage -ProxyPort $ProxyPort
       $lastHtkRestartAt = $checkedAt
       $lastRecoveryAction = 'restart-htk-android'
+      $htkRestartAttemptedForCurrentStall = $true
       $recoveryActionTakenThisPoll = $true
       $lastActivationResult = $restartResult.startHeadlessResponseSummary
       if ($restartResult.warning -eq 'eaddrinuse-existing-session-possible') {
@@ -169,6 +182,8 @@ while ($true) {
       adbOk = $adbOk; phonePingIpOk = $phonePingIpOk; phonePingDnsOk = $phonePingDnsOk;
       autoActivateEnabled = $AutoActivate; noGrowthActivateSeconds = $NoGrowthActivateSeconds; activationCooldownSeconds = $ActivationCooldownSeconds; alertCooldownSeconds = $AlertCooldownSeconds;
       autoRestartHtkEnabled = $AutoRestartHtk; htkPackage = $HtkPackage; noGrowthRestartHtkSeconds = $NoGrowthRestartHtkSeconds; htkRestartCooldownSeconds = $HtkRestartCooldownSeconds;
+      currentStallStartedAt = if ($currentStallStartedAt) { $currentStallStartedAt.ToString('o') } else { $null }; currentStallId = $currentStallId;
+      lightActivationAttemptedForCurrentStall = $lightActivationAttemptedForCurrentStall; htkRestartAttemptedForCurrentStall = $htkRestartAttemptedForCurrentStall;
       lastActivationResult = $lastActivationResult; lastRecoveryAction = $lastRecoveryAction; alertHistoryKeys = @($lastAlertsByKey.Keys | Sort-Object); lastAlert = $lastAlert
     }
     $statusObj | ConvertTo-Json -Depth 6 | Set-Content -Path $StatusPath -Encoding utf8

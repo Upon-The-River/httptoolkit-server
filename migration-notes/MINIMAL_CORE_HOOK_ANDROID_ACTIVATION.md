@@ -541,3 +541,43 @@ The script performs one detection pass and (when prerequisites are healthy and p
 If `start-headless` fails with `Failed to connect to admin server at http://127.0.0.1:45456`, treat this as official admin server unreachable and restart the official server process before retrying.
 
 Final capture proof remains unchanged: JSONL growth plus Qidian target URL hits.
+
+## Watchdog no-growth episode recovery hardening (May 1, 2026)
+
+For long-running capture, `lab-addon/scripts/qidian-capture-watchdog.ps1` now tracks per-stall no-growth episode state instead of relying on historical global activation timestamps.
+
+### Episode model
+
+- A stall episode starts when JSONL does not grow and no current stall is active.
+- `currentStallStartedAt` is set at stall start.
+- `lightActivationAttemptedForCurrentStall` and `htkRestartAttemptedForCurrentStall` are per-episode flags.
+- `currentStallId` increments only when a new stall starts.
+
+### Recovery ordering per stall episode
+
+1. Light recovery first: one `start-headless` activation attempt when activation prerequisites are healthy and activation cooldown allows.
+2. HTK Android restart second: only if no growth continues, restart threshold is reached, and light activation was already attempted in the same stall episode.
+3. JSONL growth resets episode state:
+   - `currentStallStartedAt = null`
+   - `lightActivationAttemptedForCurrentStall = false`
+   - `htkRestartAttemptedForCurrentStall = false`
+
+Historical `lastActivateAt` is still tracked for cooldown/telemetry, but it must not be used to infer that light activation was already attempted for a later stall episode.
+
+### Preserved behavior
+
+- `EADDRINUSE` remains warning-only for both light activation and HTK restart flows.
+- Phone network failure (`phonePingIpOk=false`) still alerts and suppresses repeated recovery spam/restart loops.
+- Proxy port `8000` down remains warning-only when JSONL continues growing.
+
+### Recommended long-run command
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\qidian-capture-watchdog.ps1 `
+  -PollSeconds 10 `
+  -NoGrowthActivateSeconds 60 `
+  -NoGrowthRestartHtkSeconds 120 `
+  -ActivationCooldownSeconds 180 `
+  -HtkRestartCooldownSeconds 180 `
+  -AutoRestartHtk:$true
+```
