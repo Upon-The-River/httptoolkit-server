@@ -30,7 +30,7 @@ describe('connection health service', () => {
         });
         await svc.getConnectionHealth();
         const result = await svc.getConnectionHealth();
-        assert.equal(result.dataPlaneIdle, false);
+        assert.equal(result.dataPlaneIdle, true);
         assert.equal(result.passiveDataPlaneObserved, false);
         assert.ok(['idle', 'active'].includes(result.connectionState));
         assert.notEqual(result.connectionState, 'disconnected');
@@ -95,10 +95,48 @@ describe('connection health service', () => {
         await new Promise((r) => setTimeout(r, 5));
         const result = await svc.getConnectionHealth();
         assert.equal(result.connectionState, 'disconnected');
-        assert.equal(result.disconnectEvidence.includes('bridge-unreachable'), true);
         assert.equal(result.disconnectEvidence.includes('device-offline'), true);
+        assert.equal(result.nonFatalEvidence.includes('bridge-unreachable'), true);
         assert.equal(result.disconnectEvidence.some((x) => x.includes('jsonl')), false);
         delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
+    });
+
+    it('bridge-unreachable alone never forces disconnected after threshold', async () => {
+        process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS = '1';
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({ updatedAt: new Date(0).toISOString() }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 }),
+            bridgeHealthCheck: async () => false,
+            getDeviceLikelyConnected: async () => null
+        });
+        await svc.getConnectionHealth();
+        await new Promise((r) => setTimeout(r, 5));
+        const result = await svc.getConnectionHealth();
+        assert.notEqual(result.connectionState, 'disconnected');
+        assert.equal(result.nonFatalEvidence.includes('bridge-unreachable'), true);
+        assert.equal(result.disconnectEvidence.includes('bridge-unreachable'), false);
+        delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
+    });
+
+    it('first JSONL sample builds baseline and does not imply passive data plane activity', async () => {
+        let size = 100;
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({ updatedAt: new Date().toISOString() }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: size })
+        });
+
+        const first = await svc.getConnectionHealth();
+        assert.equal(first.passiveDataPlaneObserved, false);
+        assert.equal(first.jsonlGrowthBytes, 0);
+
+        const second = await svc.getConnectionHealth();
+        assert.equal(second.passiveDataPlaneObserved, false);
+        assert.equal(second.dataPlaneIdle, true);
+
+        size = 130;
+        const third = await svc.getConnectionHealth();
+        assert.equal(third.passiveDataPlaneObserved, true);
+        assert.equal(third.jsonlGrowthBytes, 30);
     });
 
     it('under disconnected threshold remains non-disconnected', async () => {

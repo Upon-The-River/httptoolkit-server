@@ -49,7 +49,7 @@ const parseMs = (name: string, fallback: number, warnings: string[]): number => 
 export class ConnectionHealthService {
     private firstStrongFailureObservedAt: string | null = null;
     private lastStrongFailureObservedAt: string | null = null;
-    private lastJsonlSizeBytes = 0;
+    private lastJsonlSizeBytes: number | null = null;
     private lastDataPlaneObservedAt: string | null = null;
     private lastTargetTrafficObservedAt: string | null = null;
     private lastActiveProbeAt: string | null = null;
@@ -90,8 +90,8 @@ export class ConnectionHealthService {
 
         const output = this.deps.getExportOutputStatus();
         const prevSize = this.lastJsonlSizeBytes;
-        const growth = output.sizeBytes - prevSize;
-        const positiveGrowth = growth > 0;
+        const growth = prevSize === null ? 0 : (output.sizeBytes - prevSize);
+        const positiveGrowth = prevSize !== null && growth > 0;
         if (positiveGrowth) this.lastDataPlaneObservedAt = observedAt;
 
         const automation = this.deps.getAutomationHealth();
@@ -124,9 +124,13 @@ export class ConnectionHealthService {
             nonFatalEvidence.push('control-plane-stale-but-data-plane-active');
         }
 
-        if (controlPlaneAlive === false) disconnectEvidence.push('bridge-unreachable');
-        if (deviceLikelyConnected === false) disconnectEvidence.push('device-offline');
+        if (controlPlaneAlive === false) nonFatalEvidence.push('bridge-unreachable');
+        if (deviceLikelyConnected === false) {
+            nonFatalEvidence.push('device-offline');
+            disconnectEvidence.push('device-offline');
+        }
         if (this.lastActiveProbeOk === false) disconnectEvidence.push('active-probe-failed');
+        if (automation.lastStopHeadless) disconnectEvidence.push('session-stopped');
 
         const hasStrongFailure = disconnectEvidence.length > 0;
         if (hasStrongFailure) {
@@ -182,14 +186,10 @@ export class ConnectionHealthService {
             jsonlPath: output.jsonlPath,
             jsonlExists: output.exists,
             jsonlSizeBytes: output.sizeBytes,
-            jsonlLastSizeBytes: prevSize,
+            jsonlLastSizeBytes: prevSize ?? output.sizeBytes,
             jsonlGrowthBytes: growth,
             disconnectEvidence: state === 'disconnected' ? disconnectEvidence : [],
-            nonFatalEvidence: [
-                ...nonFatalEvidence,
-                ...(state !== 'disconnected' && controlPlaneAlive === false ? ['bridge-unreachable'] : []),
-                ...(state !== 'disconnected' && deviceLikelyConnected === false ? ['device-offline'] : [])
-            ],
+            nonFatalEvidence,
             warnings,
             staleReason
         };
