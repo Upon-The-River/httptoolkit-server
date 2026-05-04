@@ -5,7 +5,7 @@
   "description": "External addon migration package for Android/headless/Qidian HTTP Toolkit lab features.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/qidian-traffic-matcher.spec.ts test/session-manager-target-matcher.spec.ts test/migration-status-registry.spec.ts test/server.spec.ts test/android-network-safety.spec.ts test/android-adb-executor.spec.ts test/adb-android-activation-client.spec.ts test/headless-control-service.spec.ts test/export-targets.spec.ts test/export-event-matcher.spec.ts test/export-ingest-service.spec.ts test/android-adb-start-headless-service.spec.ts test/normalize-network-event.spec.ts test/qidian-endpoint-router.spec.ts",
+    "test": "tsx --test test/qidian-traffic-matcher.spec.ts test/session-manager-target-matcher.spec.ts test/migration-status-registry.spec.ts test/server.spec.ts test/android-network-safety.spec.ts test/android-adb-executor.spec.ts test/adb-android-activation-client.spec.ts test/headless-control-service.spec.ts test/export-targets.spec.ts test/export-event-matcher.spec.ts test/export-ingest-service.spec.ts test/android-adb-start-headless-service.spec.ts test/normalize-network-event.spec.ts test/qidian-endpoint-router.spec.ts test/connection-health-service.spec.ts",
     "start": "tsx src/server.ts"
   },
   "dependencies": {

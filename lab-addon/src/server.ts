@@ -7,6 +7,7 @@ import { AndroidAdbStartHeadlessService } from './automation/android-adb-start-h
 import { AutomationHealthStore } from './automation/automation-health-store';
 import { AndroidActivationClient } from './automation/android-activation-client';
 import { AdbAndroidActivationClient } from './automation/adb-android-activation-client';
+import { ConnectionHealthService } from './automation/connection-health-service';
 import { matchQidianTraffic, QidianTrafficMatchResult } from './qidian/qidian-traffic-matcher';
 import { HeadlessControlService } from './headless/headless-control-service';
 import { HeadlessHealthService } from './headless/headless-health-service';
@@ -55,6 +56,7 @@ export interface CreateAppOptions {
     exportTargetsLoader?: typeof loadExportTargetsConfig;
     automationService?: AndroidAdbStartHeadlessService;
     automationActivationClient?: AndroidActivationClient;
+    connectionHealthService?: ConnectionHealthService;
 }
 
 
@@ -82,8 +84,17 @@ export function createApp(options: CreateAppOptions = {}): Express {
         getLatestProcess: () => headlessControl.getLatestProcess?.()
     });
     const exportTargetsLoader = options.exportTargetsLoader ?? loadExportTargetsConfig;
-    let exportIngestService = options.exportIngestService;
     let exportFileSink = options.exportFileSink;
+    const connectionHealthService = options.connectionHealthService ?? new ConnectionHealthService({
+        getAutomationHealth: () => automationService.getHealth(),
+        getExportOutputStatus: () => {
+            if (!exportFileSink) {
+                exportFileSink = new ExportFileSink();
+            }
+            return exportFileSink.getOutputStatus();
+        }
+    });
+    let exportIngestService = options.exportIngestService;
 
     app.use(express.json({ limit: '5mb' }));
 
@@ -198,13 +209,19 @@ export function createApp(options: CreateAppOptions = {}): Express {
         res.json(result);
     }));
 
-    app.get('/automation/health', (_req, res: Response) => {
+    app.get('/automation/health', asyncHandler(async (_req, res: Response) => {
         const health = automationService.getHealth();
+        const connectionHealth = await connectionHealthService.getConnectionHealth();
         res.json({
             success: true,
-            health
+            health,
+            connectionHealth
         });
-    });
+    }));
+
+    app.get('/automation/connection-health', asyncHandler(async (_req, res: Response) => {
+        res.json(await connectionHealthService.getConnectionHealth());
+    }));
 
     app.get('/headless/health', (_req, res: Response) => {
         res.json(headlessHealth.getHealth());
@@ -302,6 +319,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
         }
 
         const ingestResult = exportIngestService.ingest(syntheticEvent, { persist });
+        try {
+            connectionHealthService.noteIngestEvent({
+                persisted: ingestResult.persisted,
+                targetMatched: ingestResult.match.matched
+            });
+        } catch {
+            // Non-fatal health signal updates must not break ingest.
+        }
         res.json({ ok: true, ...ingestResult });
     }));
 
