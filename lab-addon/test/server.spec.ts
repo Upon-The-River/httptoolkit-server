@@ -14,6 +14,7 @@ import { createApp, SessionManagerLike, startServer } from '../src/server';
 import { HeadlessControlApi } from '../src/headless/headless-types';
 import { SessionManager } from '../src/session/session-manager';
 import { safeStubStrategy } from '../src/headless/headless-backend-strategy';
+import { ConnectionHealthService } from '../src/automation/connection-health-service';
 
 const openServers: Array<{ close: () => Promise<void> }> = [];
 const tempDirs: string[] = [];
@@ -670,6 +671,81 @@ describe('lab addon service endpoints', () => {
         assert.equal(body.success, true);
         assert.equal(body.health.lastRoute, 'POST /automation/android-adb/start-headless');
         assert.equal(body.health.activationMode, 'adb-activation');
+        assert.equal(typeof body.connectionHealth?.connectionState, 'string');
+    });
+
+    it('GET /automation/connection-health returns state payload', async () => {
+        const { baseUrl } = await startTestServer(createApp({
+            androidNetworkSafety: baseAndroidSafety,
+            sessionManager: automationSessionManager
+        }));
+        const response = await fetch(`${baseUrl}/automation/connection-health`);
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(typeof body.connectionState, 'string');
+    });
+
+    it('injected connection health service keeps existing /automation/health fields', async () => {
+        const fakeConnectionHealthService = {
+            getConnectionHealth: async () => ({
+                ok: true,
+                connectionState: 'active',
+                observedAt: new Date().toISOString(),
+                lastHeartbeatAt: new Date().toISOString(),
+                controlPlaneAlive: true,
+                deviceLikelyConnected: null,
+                passiveDataPlaneObserved: false,
+                dataPlaneIdle: false,
+                targetTrafficAlive: false,
+                activeProbeSupported: false,
+                lastActiveProbeAt: null,
+                lastActiveProbeOk: null,
+                lastControlPlaneOkAt: null,
+                lastDeviceEvidenceAt: null,
+                lastDataPlaneObservedAt: null,
+                lastTargetTrafficObservedAt: null,
+                jsonlPath: null,
+                jsonlExists: false,
+                jsonlSizeBytes: 0,
+                jsonlLastSizeBytes: 0,
+                jsonlGrowthBytes: 0,
+                disconnectEvidence: [],
+                nonFatalEvidence: [],
+                warnings: [],
+                staleReason: null
+            })
+        } as unknown as ConnectionHealthService;
+
+        const { baseUrl } = await startTestServer(createApp({
+            androidNetworkSafety: baseAndroidSafety,
+            sessionManager: automationSessionManager,
+            connectionHealthService: fakeConnectionHealthService
+        }));
+        const response = await fetch(`${baseUrl}/automation/health`);
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.equal(body.success, true);
+        assert.equal(typeof body.health, 'object');
+        assert.equal(body.connectionHealth.connectionState, 'active');
+    });
+
+    it('bridge false alone and no JSONL growth does not disconnect immediately', async () => {
+        process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS = '600000';
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({ updatedAt: new Date().toISOString() }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 0 }),
+            bridgeHealthCheck: async () => false
+        });
+        const { baseUrl } = await startTestServer(createApp({
+            androidNetworkSafety: baseAndroidSafety,
+            sessionManager: automationSessionManager,
+            connectionHealthService: svc
+        }));
+        const response = await fetch(`${baseUrl}/automation/connection-health`);
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.notEqual(body.connectionState, 'disconnected');
+        delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
     });
 
     it('POST /automation/android-adb/wait-for-target-traffic returns structured timeout', async () => {

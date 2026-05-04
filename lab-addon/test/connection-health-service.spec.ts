@@ -30,7 +30,7 @@ describe('connection health service', () => {
         });
         await svc.getConnectionHealth();
         const result = await svc.getConnectionHealth();
-        assert.equal(result.dataPlaneIdle, true);
+        assert.equal(result.dataPlaneIdle, false);
         assert.equal(result.passiveDataPlaneObserved, false);
         assert.ok(['idle', 'active'].includes(result.connectionState));
         assert.notEqual(result.connectionState, 'disconnected');
@@ -112,5 +112,18 @@ describe('connection health service', () => {
         assert.ok(['stale', 'degraded', 'unknown'].includes(result.connectionState));
         assert.notEqual(result.connectionState, 'disconnected');
         delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
+    });
+
+    it('invalid bridge timeout env adds warning without crashing', async () => {
+        process.env.LAB_ADDON_CONNECTION_HEALTH_BRIDGE_TIMEOUT_MS = 'abc';
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({ updatedAt: new Date().toISOString() }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 0 })
+        });
+
+        const result = await svc.getConnectionHealth();
+        assert.equal(result.warnings.includes('invalid-env:LAB_ADDON_CONNECTION_HEALTH_BRIDGE_TIMEOUT_MS'), true);
+
+        delete process.env.LAB_ADDON_CONNECTION_HEALTH_BRIDGE_TIMEOUT_MS;
     });
 });

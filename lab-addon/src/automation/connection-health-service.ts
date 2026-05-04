@@ -47,7 +47,8 @@ const parseMs = (name: string, fallback: number, warnings: string[]): number => 
 };
 
 export class ConnectionHealthService {
-    private lastObservedAt: string | null = null;
+    private firstStrongFailureObservedAt: string | null = null;
+    private lastStrongFailureObservedAt: string | null = null;
     private lastJsonlSizeBytes = 0;
     private lastDataPlaneObservedAt: string | null = null;
     private lastTargetTrafficObservedAt: string | null = null;
@@ -128,7 +129,16 @@ export class ConnectionHealthService {
         if (this.lastActiveProbeOk === false) disconnectEvidence.push('active-probe-failed');
 
         const hasStrongFailure = disconnectEvidence.length > 0;
-        const enoughTime = this.lastObservedAt ? (now.getTime() - Date.parse(this.lastObservedAt) > this.t.disconnectedMs) : false;
+        if (hasStrongFailure) {
+            if (!this.firstStrongFailureObservedAt) this.firstStrongFailureObservedAt = observedAt;
+            this.lastStrongFailureObservedAt = observedAt;
+        } else {
+            this.firstStrongFailureObservedAt = null;
+            this.lastStrongFailureObservedAt = null;
+        }
+        const enoughTime = this.firstStrongFailureObservedAt
+            ? (now.getTime() - Date.parse(this.firstStrongFailureObservedAt) > this.t.disconnectedMs)
+            : false;
 
         let state: ConnectionState = 'unknown';
         if (hasStrongFailure && enoughTime) {
@@ -145,12 +155,11 @@ export class ConnectionHealthService {
         }
 
         const passiveDataPlaneObserved = positiveGrowth;
-        const dataPlaneIdle = !positiveGrowth;
+        const dataPlaneIdle = !positiveGrowth && !Boolean(targetRecent) && !Boolean(dataPlaneRecent);
         if (state === 'disconnected' && (passiveDataPlaneObserved || targetRecent || dataPlaneRecent)) {
             state = 'degraded';
         }
 
-        this.lastObservedAt = observedAt;
         this.lastJsonlSizeBytes = output.sizeBytes;
 
         return {
@@ -175,8 +184,12 @@ export class ConnectionHealthService {
             jsonlSizeBytes: output.sizeBytes,
             jsonlLastSizeBytes: prevSize,
             jsonlGrowthBytes: growth,
-            disconnectEvidence: state === 'disconnected' ? disconnectEvidence : disconnectEvidence.filter((e) => e === 'active-probe-failed'),
-            nonFatalEvidence,
+            disconnectEvidence: state === 'disconnected' ? disconnectEvidence : [],
+            nonFatalEvidence: [
+                ...nonFatalEvidence,
+                ...(state !== 'disconnected' && controlPlaneAlive === false ? ['bridge-unreachable'] : []),
+                ...(state !== 'disconnected' && deviceLikelyConnected === false ? ['device-offline'] : [])
+            ],
             warnings,
             staleReason
         };

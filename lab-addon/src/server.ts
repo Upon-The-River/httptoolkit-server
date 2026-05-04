@@ -92,6 +92,23 @@ export function createApp(options: CreateAppOptions = {}): Express {
                 exportFileSink = new ExportFileSink();
             }
             return exportFileSink.getOutputStatus();
+        },
+        bridgeHealthCheck: async () => {
+            const timeoutRaw = Number(process.env.LAB_ADDON_CONNECTION_HEALTH_BRIDGE_TIMEOUT_MS);
+            const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : 500;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const response = await fetch('http://127.0.0.1:45458/automation/health', {
+                    method: 'GET',
+                    signal: controller.signal
+                });
+                return response.ok;
+            } catch {
+                return false;
+            } finally {
+                clearTimeout(timer);
+            }
         }
     });
     let exportIngestService = options.exportIngestService;
