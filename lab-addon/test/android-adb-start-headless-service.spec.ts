@@ -361,4 +361,22 @@ describe('AndroidAdbStartHeadlessService matrix', () => {
         assert.equal(result.success, false);
         assert.equal(result.failurePhase, 'traffic-wait-timeout');
     });
+
+    it('stopHeadless: writes observedAt into lastStopHeadless and preserves stop result fields', async () => {
+        const { service } = makeService();
+
+        const result = await service.stopHeadless({ deviceId: 'device-1' }) as any;
+        const health = service.getHealth() as any;
+        const stop = health.lastStopHeadless as any;
+
+        assert.equal(typeof stop.observedAt, 'string');
+        assert.equal(Number.isNaN(Date.parse(stop.observedAt)), false);
+        assert.equal(stop.success, true);
+        assert.equal(stop.implemented, true);
+        assert.equal(stop.safeStub, false);
+        assert.deepEqual(stop.details, {});
+        assert.deepEqual(stop.errors, []);
+
+        assert.equal(result.success, true);
+    });
 });
