@@ -118,6 +118,59 @@ describe('connection health service', () => {
         delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
     });
 
+    it('ignores stale stop evidence when successful start is newer', async () => {
+        process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS = '1';
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({
+                updatedAt: new Date(0).toISOString(),
+                lastStopHeadless: { observedAt: '2026-01-01T00:00:00.000Z' },
+                lastSuccessfulStartHeadless: { observedAt: '2026-01-02T00:00:00.000Z' }
+            }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 0 })
+        });
+        await svc.getConnectionHealth();
+        await new Promise((r) => setTimeout(r, 5));
+        const result = await svc.getConnectionHealth();
+        assert.notEqual(result.connectionState, 'disconnected');
+        assert.equal(result.disconnectEvidence.includes('session-stopped'), false);
+        delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
+    });
+
+    it('accepts newer stop evidence as disconnected signal after threshold', async () => {
+        process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS = '1';
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({
+                updatedAt: new Date(0).toISOString(),
+                lastStopHeadless: { observedAt: '2026-01-02T00:00:00.000Z' },
+                lastSuccessfulStartHeadless: { observedAt: '2026-01-01T00:00:00.000Z' }
+            }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 0 })
+        });
+        await svc.getConnectionHealth();
+        await new Promise((r) => setTimeout(r, 5));
+        const result = await svc.getConnectionHealth();
+        assert.equal(result.connectionState, 'disconnected');
+        assert.equal(result.disconnectEvidence.includes('session-stopped'), true);
+        delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
+    });
+
+    it('treats unparseable stop evidence as non-fatal', async () => {
+        process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS = '1';
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({
+                updatedAt: new Date(0).toISOString(),
+                lastStopHeadless: { observedAt: 'not-a-date' }
+            }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 0 })
+        });
+        await svc.getConnectionHealth();
+        await new Promise((r) => setTimeout(r, 5));
+        const result = await svc.getConnectionHealth();
+        assert.notEqual(result.connectionState, 'disconnected');
+        assert.equal(result.nonFatalEvidence.includes('session-stop-evidence-unparseable'), true);
+        delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
+    });
+
     it('first JSONL sample builds baseline and does not imply passive data plane activity', async () => {
         let size = 100;
         const svc = new ConnectionHealthService({

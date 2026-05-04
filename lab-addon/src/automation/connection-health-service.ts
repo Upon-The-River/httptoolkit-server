@@ -130,7 +130,28 @@ export class ConnectionHealthService {
             disconnectEvidence.push('device-offline');
         }
         if (this.lastActiveProbeOk === false) disconnectEvidence.push('active-probe-failed');
-        if (automation.lastStopHeadless) disconnectEvidence.push('session-stopped');
+
+        const parseObservedAt = (value: unknown): number | null => {
+            if (!value || typeof value !== 'object') return null;
+            const observedAt = (value as { observedAt?: unknown }).observedAt;
+            if (typeof observedAt !== 'string') return null;
+            const ts = Date.parse(observedAt);
+            return Number.isFinite(ts) ? ts : null;
+        };
+
+        const stopTs = parseObservedAt(automation.lastStopHeadless);
+        const successfulStartTs = Math.max(
+            parseObservedAt(automation.lastSuccessfulStartHeadless) ?? Number.NEGATIVE_INFINITY,
+            parseObservedAt(automation.lastControlPlaneSuccessfulStartHeadless) ?? Number.NEGATIVE_INFINITY
+        );
+
+        if (automation.lastStopHeadless) {
+            if (stopTs === null) {
+                nonFatalEvidence.push('session-stop-evidence-unparseable');
+            } else if (stopTs > successfulStartTs) {
+                disconnectEvidence.push('session-stopped');
+            }
+        }
 
         const hasStrongFailure = disconnectEvidence.length > 0;
         if (hasStrongFailure) {

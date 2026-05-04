@@ -477,7 +477,9 @@ Compatibility notes & current limitations:
 - 当 data-plane/target traffic 仍有活跃证据时，不应显示 `disconnected`，应显示 `active` 或 `degraded`。
 - control-plane stale 但 data-plane active 时，应显示 `degraded` 或 `active`，并给出 `control-plane-stale-but-data-plane-active` warning/non-fatal evidence。
 - 无流量但 control-plane/device evidence 正常时，应显示 `idle`，不是 `disconnected`。
-- `disconnected` 只应由强失败证据（如 bridge unreachable、device offline、active probe failed）触发。
+- `bridge-unreachable` 属于 control-plane degraded / nonFatalEvidence，不能单独触发 `disconnected`。
+- `disconnected` 只应由真正强失败证据并持续超过阈值触发，例如：`device-offline`、`active-probe-failed`、session registry 明确 `stopped` 且没有更新的 successful start、proxy/data-plane 主动探测明确失败、多个关键证据同时失败。
+- JSONL 不增长仍然不能作为 `disconnected` evidence。
 
 端口职责：
 
