@@ -426,10 +426,14 @@ export class AndroidAdbStartHeadlessService {
 
     async stopHeadless(input: { deviceId?: string }): Promise<unknown> {
         const result = await this.activationClient.stopDeviceCapture({ deviceId: input.deviceId });
+        const stopResult = {
+            ...result,
+            observedAt: new Date().toISOString()
+        };
         const health = this.healthStore.patch({
             lastRoute: 'POST /automation/android-adb/stop-headless',
             lastDeviceId: input.deviceId,
-            lastStopHeadless: result
+            lastStopHeadless: stopResult
         });
 
         return {
