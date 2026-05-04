@@ -467,3 +467,20 @@ Compatibility notes & current limitations:
 - Start-headless route returns a legacy-compatible automation response shape from addon.
 - Activation behavior may be partial unless an explicit activation bridge/client is configured (default is conservative safe stub).
 - Stop/recover are conservative safe-stub flows unless explicitly implemented with a safe activation client.
+
+## Long-run connection health semantics
+
+- `/automation/health` 中的 `lastSuccessfulStartHeadless`、`lastControlPlaneSuccessfulStartHeadless` 主要是启动/控制面快照，不是长期 data-plane 存活证明。
+- 电脑层长期连接状态推荐读取 `GET /automation/connection-health`（`/automation/health` 里也附带 `connectionHealth` 字段以兼容旧客户端）。
+- JSONL 增长、target traffic 观测到、`/export/ingest` 成功 `persisted=true` 都是 data-plane 活跃强证据。
+- JSONL 不增长不是断线证据：设备静止、App 未发请求、未命中 target 时都可能正常不增长。
+- 当 data-plane/target traffic 仍有活跃证据时，不应显示 `disconnected`，应显示 `active` 或 `degraded`。
+- control-plane stale 但 data-plane active 时，应显示 `degraded` 或 `active`，并给出 `control-plane-stale-but-data-plane-active` warning/non-fatal evidence。
+- 无流量但 control-plane/device evidence 正常时，应显示 `idle`，不是 `disconnected`。
+- `disconnected` 只应由强失败证据（如 bridge unreachable、device offline、active probe failed）触发。
+
+端口职责：
+
+- `45456`：Mockttp admin/core 控制（不提供 automation 路由）。
+- `45457`：lab-addon API，长期状态推荐 `GET /automation/connection-health`。
+- `45458`：official Android activation bridge，属于 control-plane evidence，不等同于长期 data-plane。
