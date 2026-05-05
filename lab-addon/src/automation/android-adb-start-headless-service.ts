@@ -499,10 +499,14 @@ export class AndroidAdbStartHeadlessService {
 
     async recoverHeadless(input: { deviceId?: string }): Promise<unknown> {
         const result = await this.activationClient.recoverDeviceCapture({ deviceId: input.deviceId });
+        const recoverResult = {
+            ...result,
+            observedAt: new Date().toISOString()
+        };
         const health = this.healthStore.patch({
             lastRoute: 'POST /automation/android-adb/recover-headless',
             lastDeviceId: input.deviceId,
-            lastRecoverHeadless: result
+            lastRecoverHeadless: recoverResult
         });
 
         return {

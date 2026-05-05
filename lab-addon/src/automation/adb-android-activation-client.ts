@@ -63,11 +63,16 @@ export class AdbAndroidActivationClient implements AndroidActivationClient {
 
     private async tryOfficialBridge(options: AndroidActivationRequest): Promise<AndroidActivationResult | undefined> {
         const url = `${this.officialAdminBaseUrl.replace(/\/$/, '')}/automation/android-adb/start-headless`;
+        const timeoutRaw = Number(process.env.LAB_ADDON_OFFICIAL_BRIDGE_START_TIMEOUT_MS);
+        const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : 5000;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
         let response: Response;
         try {
             response = await this.fetchImpl(url, {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
+                signal: controller.signal,
                 body: JSON.stringify({
                     deviceId: options.deviceId,
                     proxyPort: options.proxyPort,
@@ -77,10 +82,20 @@ export class AdbAndroidActivationClient implements AndroidActivationClient {
             });
         } catch (error) {
             return undefined;
+        } finally {
+            clearTimeout(timer);
         }
 
         if (response.status === 404) {
             return undefined;
+        }
+        if (response.status >= 500) return undefined;
+        if (response.status >= 400) {
+            return {
+                success: false,
+                details: { implemented: true, partial: true, safeStub: false, activationMode: 'partial', reason: `official-bridge-http-${response.status}`, bridgeUrl: url },
+                errors: [`official-bridge-http-${response.status}`]
+            };
         }
 
         const payload = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;

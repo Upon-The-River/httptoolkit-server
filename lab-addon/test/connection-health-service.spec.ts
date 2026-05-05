@@ -32,7 +32,7 @@ describe('connection health service', () => {
         const result = await svc.getConnectionHealth();
         assert.equal(result.dataPlaneIdle, true);
         assert.equal(result.passiveDataPlaneObserved, false);
-        assert.ok(['idle', 'active'].includes(result.connectionState));
+        assert.equal(result.connectionState, 'idle');
         assert.notEqual(result.connectionState, 'disconnected');
     });
 
@@ -79,7 +79,7 @@ describe('connection health service', () => {
             getDeviceLikelyConnected: async () => null
         });
         const result = await svc.getConnectionHealth();
-        assert.equal(result.warnings.includes('vpn-evidence-unavailable'), true);
+        assert.equal(result.nonFatalEvidence.includes('device-evidence-not-configured'), false);
         assert.notEqual(result.connectionState, 'disconnected');
     });
 
@@ -141,7 +141,7 @@ describe('connection health service', () => {
         const svc = new ConnectionHealthService({
             getAutomationHealth: () => ({
                 updatedAt: new Date(0).toISOString(),
-                lastStopHeadless: { observedAt: '2026-01-02T00:00:00.000Z' },
+                lastStopHeadless: { observedAt: '2026-01-02T00:00:00.000Z', success: true, safeStub: false, implemented: true },
                 lastSuccessfulStartHeadless: { observedAt: '2026-01-01T00:00:00.000Z' }
             }),
             getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 0 })
@@ -152,6 +152,36 @@ describe('connection health service', () => {
         assert.equal(result.connectionState, 'disconnected');
         assert.equal(result.disconnectEvidence.includes('session-stopped'), true);
         delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
+    });
+
+    it('fresh mobile capture evidence can make active', async () => {
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({
+                updatedAt: new Date().toISOString(),
+                lastNetworkInspection: { inspectedAt: new Date().toISOString(), activeNetworkMentionsVpn: true }
+            }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 }),
+            bridgeHealthCheck: async () => true
+        });
+        await svc.getConnectionHealth();
+        const result = await svc.getConnectionHealth();
+        assert.equal(result.connectionState, 'active');
+    });
+
+    it('stale mobile capture evidence cannot make active', async () => {
+        process.env.LAB_ADDON_CONNECTION_HEALTH_MOBILE_EVIDENCE_RECENT_MS = '1';
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({
+                updatedAt: new Date().toISOString(),
+                lastNetworkInspection: { inspectedAt: '2020-01-01T00:00:00.000Z', activeNetworkMentionsVpn: true }
+            }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 }),
+            bridgeHealthCheck: async () => true
+        });
+        const result = await svc.getConnectionHealth();
+        assert.notEqual(result.connectionState, 'active');
+        assert.equal(result.nonFatalEvidence.includes('mobile-evidence-stale'), true);
+        delete process.env.LAB_ADDON_CONNECTION_HEALTH_MOBILE_EVIDENCE_RECENT_MS;
     });
 
     it('treats unparseable stop evidence as non-fatal', async () => {
@@ -168,6 +198,44 @@ describe('connection health service', () => {
         const result = await svc.getConnectionHealth();
         assert.notEqual(result.connectionState, 'disconnected');
         assert.equal(result.nonFatalEvidence.includes('session-stop-evidence-unparseable'), true);
+        delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
+    });
+
+    it('safeStub stop evidence is ignored as non-fatal', async () => {
+        process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS = '1';
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({
+                updatedAt: new Date(0).toISOString(),
+                lastStopHeadless: { observedAt: '2026-01-02T00:00:00.000Z', success: true, safeStub: true, implemented: true },
+                lastSuccessfulStartHeadless: { observedAt: '2026-01-01T00:00:00.000Z' }
+            }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 0 })
+        });
+        await svc.getConnectionHealth();
+        await new Promise((r) => setTimeout(r, 5));
+        const result = await svc.getConnectionHealth();
+        assert.notEqual(result.connectionState, 'disconnected');
+        assert.equal(result.disconnectEvidence.includes('session-stopped'), false);
+        assert.equal(result.nonFatalEvidence.includes('stop-safe-stub-ignored'), true);
+        delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
+    });
+
+    it('implemented=false stop evidence is ignored as non-fatal', async () => {
+        process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS = '1';
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({
+                updatedAt: new Date(0).toISOString(),
+                lastStopHeadless: { observedAt: '2026-01-02T00:00:00.000Z', success: true, safeStub: false, implemented: false },
+                lastSuccessfulStartHeadless: { observedAt: '2026-01-01T00:00:00.000Z' }
+            }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 0 })
+        });
+        await svc.getConnectionHealth();
+        await new Promise((r) => setTimeout(r, 5));
+        const result = await svc.getConnectionHealth();
+        assert.notEqual(result.connectionState, 'disconnected');
+        assert.equal(result.disconnectEvidence.includes('session-stopped'), false);
+        assert.equal(result.nonFatalEvidence.includes('stop-not-implemented-ignored'), true);
         delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
     });
 
