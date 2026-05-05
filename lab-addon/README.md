@@ -497,3 +497,10 @@ Compatibility notes & current limitations:
 - `45456`：Mockttp admin/core 控制（不提供 automation 路由）。
 - `45457`：lab-addon API，长期状态推荐 `GET /automation/connection-health`。
 - `45458`：official Android activation bridge，属于 control-plane evidence，不等同于长期 data-plane。
+
+
+## Bridge mode caveats
+- Legacy official bridge success contract (`success: true` without `controlPlaneSuccess`) is accepted as compatible success, and addon must not start a duplicate local session.
+- Bridge health parsing inspects structured body and start-headless capability; HTTP `ok` alone is not authoritative.
+- `POST /automation/android-adb/start-headless` supports optional wait tuning fields: `trafficWaitTimeoutMs`, `trafficWaitPollMs`, `targetTrafficWaitTimeoutMs`, `targetTrafficWaitPollMs`.
+- `POST /session/target-signal` reflects addon self-session pass-through evidence. In official-bridge mode it may return unavailable; watchdogs should rely on `/automation/connection-health` and `/export/output-status`.

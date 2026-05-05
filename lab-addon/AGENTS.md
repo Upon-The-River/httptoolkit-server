@@ -92,3 +92,10 @@ When changing connection-state logic, add/modify tests for:
 - recover newer than stop => clears stop evidence.
 - bridge timeout/5xx => fallback to ADB intent.
 - official bridge URL env override affects both activation client and health check.
+
+
+## Bridge compatibility notes (P1)
+- Legacy official bridge contract `{ success: true }` (without `controlPlaneSuccess`) is treated as bridge activation success and should skip addon self-session start to avoid duplicate session races.
+- `/automation/health` evaluation must parse body flags/capabilities; HTTP 200 alone is insufficient when body indicates disabled/degraded/capability false.
+- `start-headless` request supports `trafficWaitTimeoutMs`, `trafficWaitPollMs`, `targetTrafficWaitTimeoutMs`, `targetTrafficWaitPollMs`.
+- `/session/target-signal` is self-session evidence only; in official-bridge mode it can be unavailable and watchdogs should prefer `/automation/connection-health`, `/export/output-status`, and ingest-derived evidence.
