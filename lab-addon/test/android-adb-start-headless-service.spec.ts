@@ -379,4 +379,51 @@ describe('AndroidAdbStartHeadlessService matrix', () => {
 
         assert.equal(result.success, true);
     });
+
+    it('waitForTraffic=false and waitForTargetTraffic=false does not require JSONL growth', async () => {
+        const { service } = makeService({ outputSizes: [100, 100], recordsTimeline: [[], []] });
+        const result = await service.startHeadless({ deviceId: 'device-1', waitForTraffic: false, waitForTargetTraffic: false });
+        assert.equal(result.overallSuccess, true);
+        assert.equal(result.failurePhase, undefined);
+    });
+
+    it('bridge validation overallSuccess=true does not fail with traffic-wait-timeout when local JSONL is unchanged', async () => {
+        const { service } = makeService({
+            activationResult: {
+                success: true,
+                details: {
+                    bridgeResponse: { success: true, controlPlaneSuccess: true, validation: { overallSuccess: true } }
+                }
+            },
+            outputSizes: [100, 100, 100],
+            recordsTimeline: [[], [], []]
+        });
+        const result = await service.startHeadless({ deviceId: 'device-1', waitForTraffic: true });
+        assert.equal(result.overallSuccess, true);
+        assert.notEqual(result.failurePhase, 'traffic-wait-timeout');
+    });
+
+    it('trafficWaitTimeoutMs and trafficWaitPollMs are honored for traffic wait execution', async () => {
+        const { service } = makeService({ outputSizes: [100, 100, 100], recordsTimeline: [[], [], []] });
+        const result = await service.startHeadless({
+            deviceId: 'device-1',
+            waitForTraffic: true,
+            trafficWaitTimeoutMs: 1,
+            trafficWaitPollMs: 1
+        });
+        assert.equal(result.overallSuccess, false);
+        assert.equal(result.failurePhase, 'traffic-wait-timeout');
+    });
+
+    it('targetTrafficWaitTimeoutMs and targetTrafficWaitPollMs are honored for target wait execution', async () => {
+        const { service } = makeService({ outputSizes: [100, 100, 100], recordsTimeline: [[], [], []] });
+        const result = await service.startHeadless({
+            deviceId: 'device-1',
+            waitForTargetTraffic: true,
+            targetTrafficWaitTimeoutMs: 1,
+            targetTrafficWaitPollMs: 1
+        });
+        assert.equal(result.overallSuccess, false);
+        assert.equal(result.failurePhase, 'target-wait-timeout');
+    });
 });
