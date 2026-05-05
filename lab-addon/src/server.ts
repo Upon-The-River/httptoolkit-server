@@ -105,7 +105,20 @@ export function createApp(options: CreateAppOptions = {}): Express {
                     method: 'GET',
                     signal: controller.signal
                 });
-                return response.ok;
+                if (!response.ok) return false;
+                const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+                if (!payload) return false;
+                if (payload.ok === false || payload.success === false || payload.healthy === false) return false;
+                const capabilities = payload.capabilities as Record<string, unknown> | undefined;
+                const routeMap = payload.routes as Record<string, unknown> | undefined;
+                const androidBlock = payload.androidAdbStartHeadless as Record<string, unknown> | undefined;
+                if (capabilities) {
+                    return capabilities.androidAdbStartHeadless === true
+                        || capabilities.startHeadless === true
+                        || androidBlock?.implemented === true
+                        || routeMap?.['/automation/android-adb/start-headless'] === true;
+                }
+                return true;
             } catch {
                 return false;
             } finally {
@@ -159,6 +172,18 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }));
 
     app.post('/session/target-signal', asyncHandler(async (req: Request, res: Response) => {
+        const automationHealth = automationService.getHealth() as Record<string, unknown>;
+        const latestSuccessfulStart = automationHealth?.lastSuccessfulStartHeadless as Record<string, unknown> | undefined;
+        const sessionSource = latestSuccessfulStart?.sessionSource;
+        if (sessionSource === 'official-bridge') {
+            res.json({
+                observed: false,
+                unavailable: true,
+                reason: 'target-signal-unavailable-in-bridge-mode',
+                recommendedSource: '/automation/connection-health or /export/output-status'
+            });
+            return;
+        }
         const waitMs = typeof req.body?.waitMs === 'number' ? req.body.waitMs : undefined;
         const pollIntervalMs = typeof req.body?.pollIntervalMs === 'number' ? req.body.pollIntervalMs : undefined;
 
@@ -195,7 +220,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
             allowUnsafeStart: req.body?.allowUnsafeStart === true,
             enableSocks: req.body?.enableSocks === true,
             waitForTraffic: typeof req.body?.waitForTraffic === 'boolean' ? req.body.waitForTraffic : undefined,
-            waitForTargetTraffic: typeof req.body?.waitForTargetTraffic === 'boolean' ? req.body.waitForTargetTraffic : undefined
+            waitForTargetTraffic: typeof req.body?.waitForTargetTraffic === 'boolean' ? req.body.waitForTargetTraffic : undefined,
+            trafficWaitTimeoutMs: typeof req.body?.trafficWaitTimeoutMs === 'number' ? req.body.trafficWaitTimeoutMs : undefined,
+            trafficWaitPollMs: typeof req.body?.trafficWaitPollMs === 'number' ? req.body.trafficWaitPollMs : undefined,
+            targetTrafficWaitTimeoutMs: typeof req.body?.targetTrafficWaitTimeoutMs === 'number' ? req.body.targetTrafficWaitTimeoutMs : undefined,
+            targetTrafficWaitPollMs: typeof req.body?.targetTrafficWaitPollMs === 'number' ? req.body.targetTrafficWaitPollMs : undefined
         });
 
         const statusCode = result.success ? 200 : 409;

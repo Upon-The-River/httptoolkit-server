@@ -115,8 +115,12 @@ export class AdbAndroidActivationClient implements AndroidActivationClient {
         }
 
         const bridgeSuccess = payload.success === true;
+        const controlPlaneFieldPresent = Object.prototype.hasOwnProperty.call(payload, 'controlPlaneSuccess');
         const bridgeControlPlaneSuccess = payload.controlPlaneSuccess === true;
-        const effectiveSuccess = bridgeSuccess && bridgeControlPlaneSuccess;
+        const bridgeControlPlaneUnknown = bridgeSuccess && !controlPlaneFieldPresent;
+        const bridgeLegacySuccess = bridgeControlPlaneUnknown;
+        const effectiveControlPlaneSuccess = bridgeControlPlaneSuccess || bridgeLegacySuccess;
+        const effectiveSuccess = bridgeSuccess && effectiveControlPlaneSuccess;
         return {
             success: effectiveSuccess,
             details: {
@@ -125,7 +129,16 @@ export class AdbAndroidActivationClient implements AndroidActivationClient {
                 safeStub: false,
                 activationMode: effectiveSuccess ? 'official-bridge' : 'partial',
                 bridgeUrl: url,
-                bridgeResponse: payload
+                bridgeResponse: {
+                    ...payload,
+                    bridgeReachable: true,
+                    bridgeActivationSuccess: bridgeSuccess,
+                    bridgeControlPlaneSuccess: effectiveControlPlaneSuccess,
+                    bridgeControlPlaneUnknown,
+                    bridgeLegacySuccess,
+                    usedOfficialBridge: true,
+                    shouldSkipAddonSessionStart: bridgeSuccess
+                }
             },
             errors: effectiveSuccess ? [] : ['official-bridge-failed']
         };

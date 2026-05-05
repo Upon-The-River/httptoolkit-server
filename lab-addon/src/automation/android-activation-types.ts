@@ -35,6 +35,10 @@ export interface StartHeadlessRequest {
     enableSocks?: boolean;
     waitForTraffic?: boolean;
     waitForTargetTraffic?: boolean;
+    trafficWaitTimeoutMs?: number;
+    trafficWaitPollMs?: number;
+    targetTrafficWaitTimeoutMs?: number;
+    targetTrafficWaitPollMs?: number;
 }
 export interface WaitForTargetTrafficRequest {
     baselineBytes?: number;
@@ -96,7 +100,7 @@ export interface StartHeadlessResponse {
     evidence: StartHeadlessEvidence;
     session: {
         active: boolean;
-        source: 'addon';
+        source: 'addon' | 'official-bridge';
         details: Record<string, unknown> & {
             validation?: {
                 overallSuccess: boolean;

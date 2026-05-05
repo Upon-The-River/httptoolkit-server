@@ -12,6 +12,7 @@ const TRAFFIC_WAIT_POLL_MS = 500;
 const OBSERVE_TRAFFIC_WAIT_TIMEOUT_MS = 30_000;
 const OBSERVE_TRAFFIC_WAIT_POLL_MS = 500;
 const OBSERVE_SAMPLE_TARGET_URLS_MAX = 10;
+const MAX_WAIT_TIMEOUT_MS = 300_000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -28,6 +29,10 @@ const resolveActivationMode = (activationResult: { success: boolean, details?: R
 const asRecord = (value: unknown): Record<string, unknown> | undefined => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return;
     return value as Record<string, unknown>;
+};
+const sanitizeWaitMs = (value: unknown, fallback: number, max = MAX_WAIT_TIMEOUT_MS) => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return fallback;
+    return Math.min(Math.floor(value), max);
 };
 
 const toWarningCode = (raw: string): string | undefined => {
@@ -161,7 +166,9 @@ export class AndroidAdbStartHeadlessService {
     private async pollOutputWindow(options: {
         shouldWaitForTraffic: boolean,
         shouldWaitForTargetTraffic: boolean,
-        baselineBytes: number
+        baselineBytes: number,
+        timeoutMs: number,
+        pollMs: number
     }): Promise<TrafficEvidence> {
         if (!(options.shouldWaitForTraffic || options.shouldWaitForTargetTraffic)) {
             return {
@@ -207,9 +214,9 @@ export class AndroidAdbStartHeadlessService {
             return snapshot;
         }
 
-        const deadline = Date.now() + TRAFFIC_WAIT_TIMEOUT_MS;
+        const deadline = Date.now() + options.timeoutMs;
         while (Date.now() < deadline && !satisfied()) {
-            await sleep(TRAFFIC_WAIT_POLL_MS);
+            await sleep(options.pollMs);
             snapshot = evaluateTrafficEvidence();
         }
 
@@ -258,6 +265,10 @@ export class AndroidAdbStartHeadlessService {
 
         const shouldWaitForTraffic = input.waitForTraffic === true;
         const shouldWaitForTargetTraffic = input.waitForTargetTraffic === true;
+        const trafficWaitTimeoutMs = sanitizeWaitMs(input.trafficWaitTimeoutMs, TRAFFIC_WAIT_TIMEOUT_MS);
+        const trafficWaitPollMs = sanitizeWaitMs(input.trafficWaitPollMs, TRAFFIC_WAIT_POLL_MS, 10_000);
+        const targetTrafficWaitTimeoutMs = sanitizeWaitMs(input.targetTrafficWaitTimeoutMs, OBSERVE_TRAFFIC_WAIT_TIMEOUT_MS);
+        const targetTrafficWaitPollMs = sanitizeWaitMs(input.targetTrafficWaitPollMs, OBSERVE_TRAFFIC_WAIT_POLL_MS, 10_000);
         const jsonlBaselineBytes = this.exportFileSink.getOutputStatus().sizeBytes;
 
         const activationResult = await this.activationClient.activateDeviceCapture({
@@ -268,22 +279,35 @@ export class AndroidAdbStartHeadlessService {
 
         const activationDetails = asRecord(activationResult.details) ?? {};
         const bridgeResponse = asRecord(activationDetails.bridgeResponse);
-        const bridgeControlPlaneSuccess = bridgeResponse?.controlPlaneSuccess === true;
+        const bridgeActivationSuccess = bridgeResponse?.bridgeActivationSuccess === true || bridgeResponse?.success === true;
+        const bridgeControlPlaneUnknown = bridgeResponse?.bridgeControlPlaneUnknown === true
+            || (bridgeActivationSuccess && !Object.prototype.hasOwnProperty.call(bridgeResponse ?? {}, 'controlPlaneSuccess'));
+        const bridgeLegacySuccess = bridgeResponse?.bridgeLegacySuccess === true || bridgeControlPlaneUnknown;
+        const bridgeControlPlaneSuccess = bridgeResponse?.bridgeControlPlaneSuccess === true || bridgeResponse?.controlPlaneSuccess === true || bridgeLegacySuccess;
         const usedOfficialBridge = bridgeResponse !== undefined;
+        const shouldSkipAddonSessionStart = bridgeResponse?.shouldSkipAddonSessionStart === true || (usedOfficialBridge && bridgeActivationSuccess);
 
         let localSession: Awaited<ReturnType<SessionManagerLike['startSessionIfNeeded']>> | undefined;
-        if (!bridgeControlPlaneSuccess) {
+        if (!shouldSkipAddonSessionStart) {
             localSession = await this.sessionManager.startSessionIfNeeded({ proxyPort: requestedProxyPort });
         }
+        const bridgeValidation = asRecord(bridgeResponse?.validation);
+        const bridgeValidatedSuccess = bridgeValidation?.overallSuccess === true;
+        const waitForTrafficInAddon = shouldWaitForTraffic && !bridgeValidatedSuccess;
+        const waitForTargetTrafficInAddon = shouldWaitForTargetTraffic && !bridgeValidatedSuccess;
+        const waitTimeoutMs = waitForTargetTrafficInAddon ? targetTrafficWaitTimeoutMs : trafficWaitTimeoutMs;
+        const waitPollMs = waitForTargetTrafficInAddon ? targetTrafficWaitPollMs : trafficWaitPollMs;
 
         const effectiveProxyPort = bridgeControlPlaneSuccess && typeof bridgeResponse?.proxyPort === 'number'
             ? bridgeResponse.proxyPort
             : localSession?.proxyPort ?? requestedProxyPort;
 
         const trafficEvidence = await this.pollOutputWindow({
-            shouldWaitForTraffic,
-            shouldWaitForTargetTraffic,
-            baselineBytes: jsonlBaselineBytes
+            shouldWaitForTraffic: waitForTrafficInAddon,
+            shouldWaitForTargetTraffic: waitForTargetTrafficInAddon,
+            baselineBytes: jsonlBaselineBytes,
+            timeoutMs: waitTimeoutMs,
+            pollMs: waitPollMs
         });
 
         const dataPlaneObserved = trafficEvidence.dataPlaneObserved;
@@ -302,8 +326,8 @@ export class AndroidAdbStartHeadlessService {
 
         const outcome = evaluateStartHeadlessOutcome({
             controlPlaneSuccess,
-            shouldWaitForTraffic,
-            shouldWaitForTargetTraffic,
+            shouldWaitForTraffic: waitForTrafficInAddon,
+            shouldWaitForTargetTraffic: waitForTargetTrafficInAddon,
             dataPlaneObserved,
             targetTrafficObserved
         });
@@ -352,6 +376,7 @@ export class AndroidAdbStartHeadlessService {
             evidence,
             warnings: warningCodes,
             errors: activationResult.errors ?? [],
+            sessionSource: bridgeControlPlaneSuccess ? 'official-bridge' : 'addon',
             observedAt: new Date().toISOString()
         };
 
@@ -375,7 +400,7 @@ export class AndroidAdbStartHeadlessService {
             proxyPort: effectiveProxyPort,
             session: {
                 active: controlPlaneSuccess,
-                source: 'addon',
+                source: bridgeControlPlaneSuccess ? 'official-bridge' : 'addon',
                 details: bridgeControlPlaneSuccess
                     ? {
                         source: 'official-bridge',
@@ -407,7 +432,7 @@ export class AndroidAdbStartHeadlessService {
             failurePhase: outcome.failurePhase,
             evidence,
             activationResult: bridgeControlPlaneSuccess
-                ? { implemented: true, activationMode: 'official-bridge', bridgeResponse }
+                ? { implemented: true, activationMode: 'official-bridge', bridgeResponse, bridgeActivationSuccess, bridgeControlPlaneSuccess, bridgeControlPlaneUnknown, bridgeLegacySuccess, usedOfficialBridge, shouldSkipAddonSessionStart }
                 : (activationResult.details ?? { success: activationResult.success }),
             warnings: warningCodes,
             health,
