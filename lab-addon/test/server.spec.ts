@@ -1466,6 +1466,70 @@ describe('bridge health and target-signal bridge mode semantics', () => {
         }
     });
 
+    it('bridge health parser marks capabilities:{} as controlPlaneAlive=false', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, capabilities: {} }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+        })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, false);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
+    it('bridge health parser marks routes:{} as controlPlaneAlive=false', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, routes: {} }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+        })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, false);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
+    it('bridge health parser marks androidAdbStartHeadless:{} as controlPlaneAlive=false', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, androidAdbStartHeadless: {} }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+        })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, false);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
+    it('bridge health parser keeps legacy ok:true message body as controlPlaneAlive=true', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, message: 'legacy bridge health' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+        })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, true);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
     it('target-signal returns unavailable in bridge mode from lastControlPlaneSuccessfulStartHeadless', async () => {
         const automationActivationClient: AndroidActivationClient = {
             activateDeviceCapture: async () => ({ success: true, details: { bridgeResponse: { success: true, controlPlaneSuccess: true } } }),
@@ -1549,5 +1613,81 @@ describe('bridge health and target-signal bridge mode semantics', () => {
         const body = await response.json();
         assert.equal(body.unavailable, true);
         assert.equal(body.reason, 'target-signal-unavailable-in-bridge-mode');
+    });
+
+    it('target-signal keeps bridge unavailable when latest evidence is official-bridge', async () => {
+        const automationService = {
+            getHealth: () => ({
+                lastStartHeadless: { sessionSource: 'official-bridge', observedAt: '2026-01-01T10:05:00.000Z' },
+                lastSuccessfulStartHeadless: { sessionSource: 'addon', observedAt: '2026-01-01T10:00:00.000Z' }
+            })
+        } as any;
+        const { baseUrl } = await startTestServer(createApp({ automationService }));
+        const response = await fetch(`${baseUrl}/session/target-signal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        const body = await response.json();
+        assert.equal(body.unavailable, true);
+    });
+
+    it('target-signal uses self-session path when addon evidence is newer than old official-bridge', async () => {
+        let called = false;
+        const sessionManager: SessionManagerLike = {
+            startSessionIfNeeded: async () => ({ created: false, proxyPort: 8000, sessionUrl: 'http://127.0.0.1:8000' }),
+            getLatestSession: () => ({ active: false }),
+            stopLatestSession: async () => ({ stopped: false }),
+            getObservedTrafficSignal: async () => ({ observed: false, source: 'none', totalSeenRequests: 0, ignoredBootstrapRequests: 0, matchingRequests: 0 }),
+            getTargetTrafficSignal: async () => {
+                called = true;
+                return { observed: false, source: 'none', totalSeenRequests: 0, ignoredBootstrapRequests: 0, matchingRequests: 0 };
+            }
+        };
+        const automationService = {
+            getHealth: () => ({
+                lastControlPlaneSuccessfulStartHeadless: { sessionSource: 'official-bridge', observedAt: '2026-01-01T10:00:00.000Z' },
+                lastSuccessfulStartHeadless: { sessionSource: 'addon', observedAt: '2026-01-01T10:05:00.000Z' }
+            })
+        } as any;
+        const { baseUrl } = await startTestServer(createApp({ sessionManager, automationService }));
+        const response = await fetch(`${baseUrl}/session/target-signal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        const body = await response.json();
+        assert.equal(called, true);
+        assert.equal(body.unavailable, undefined);
+    });
+
+    it('target-signal returns bridge unavailable when official-bridge evidence is newer than addon', async () => {
+        const automationService = {
+            getHealth: () => ({
+                lastSuccessfulStartHeadless: { sessionSource: 'addon', observedAt: '2026-01-01T10:00:00.000Z' },
+                lastStartHeadless: { sessionSource: 'official-bridge', observedAt: '2026-01-01T10:05:00.000Z' }
+            })
+        } as any;
+        const { baseUrl } = await startTestServer(createApp({ automationService }));
+        const response = await fetch(`${baseUrl}/session/target-signal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        const body = await response.json();
+        assert.equal(body.unavailable, true);
+    });
+
+    it('target-signal prefers parseable addon observedAt over official-bridge without parseable observedAt', async () => {
+        let called = false;
+        const sessionManager: SessionManagerLike = {
+            startSessionIfNeeded: async () => ({ created: false, proxyPort: 8000, sessionUrl: 'http://127.0.0.1:8000' }),
+            getLatestSession: () => ({ active: false }),
+            stopLatestSession: async () => ({ stopped: false }),
+            getObservedTrafficSignal: async () => ({ observed: false, source: 'none', totalSeenRequests: 0, ignoredBootstrapRequests: 0, matchingRequests: 0 }),
+            getTargetTrafficSignal: async () => {
+                called = true;
+                return { observed: false, source: 'none', totalSeenRequests: 0, ignoredBootstrapRequests: 0, matchingRequests: 0 };
+            }
+        };
+        const automationService = {
+            getHealth: () => ({
+                lastControlPlaneSuccessfulStartHeadless: { sessionSource: 'official-bridge', observedAt: 'bad-date' },
+                lastSuccessfulStartHeadless: { sessionSource: 'addon', observedAt: '2026-01-01T10:05:00.000Z' }
+            })
+        } as any;
+        const { baseUrl } = await startTestServer(createApp({ sessionManager, automationService }));
+        const response = await fetch(`${baseUrl}/session/target-signal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        const body = await response.json();
+        assert.equal(called, true);
+        assert.equal(body.unavailable, undefined);
     });
 });

@@ -331,6 +331,36 @@ describe('AndroidAdbStartHeadlessService matrix', () => {
         assert.equal(getStartCalls(), 0);
     });
 
+    it('H: legacy bridge success should not call sessionManager.startSessionIfNeeded', async () => {
+        const { service, getStartCalls } = makeService({
+            activationResult: {
+                success: true,
+                details: {
+                    bridgeResponse: {
+                        success: true,
+                        bridgeActivationSuccess: true,
+                        bridgeLegacySuccess: true,
+                        bridgeControlPlaneUnknown: true,
+                        bridgeControlPlaneSuccess: true,
+                        shouldSkipAddonSessionStart: true,
+                        proxyPort: 8000
+                    }
+                },
+                errors: []
+            }
+        });
+
+        const result = await service.startHeadless({
+            deviceId: 'device-1',
+            waitForTraffic: false,
+            waitForTargetTraffic: false
+        });
+
+        assert.equal(getStartCalls(), 0);
+        assert.equal(result.overallSuccess, true);
+        assert.equal(result.session.source, 'official-bridge');
+    });
+
     it('waitForTargetTraffic: observes only post-baseline target traffic', async () => {
         const { service } = makeService({
             outputSizes: [100, 120],
