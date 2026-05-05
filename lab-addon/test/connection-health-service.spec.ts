@@ -154,26 +154,50 @@ describe('connection health service', () => {
         delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
     });
 
-    it('fresh mobile capture evidence can make active', async () => {
+    it('generic VPN evidence alone is not active', async () => {
         const svc = new ConnectionHealthService({
             getAutomationHealth: () => ({
                 updatedAt: new Date().toISOString(),
-                lastNetworkInspection: { inspectedAt: new Date().toISOString(), activeNetworkMentionsVpn: true }
+                lastNetworkInspection: {
+                    inspectedAt: new Date().toISOString(),
+                    vpn: { activeNetworkMentionsVpn: true }
+                }
+            }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 }),
+            bridgeHealthCheck: async () => true,
+            getDeviceLikelyConnected: async () => true
+        });
+        await svc.getConnectionHealth();
+        const result = await svc.getConnectionHealth();
+        assert.notEqual(result.connectionState, 'active');
+        assert.equal(result.nonFatalEvidence.includes('generic-vpn-evidence-not-htk-specific'), true);
+    });
+
+    it('fresh HTK-specific mobile evidence can make active', async () => {
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({
+                updatedAt: new Date().toISOString(),
+                lastNetworkInspection: {
+                    inspectedAt: new Date().toISOString(),
+                    dumpsysVpnMentionsHttpToolkit: true
+                }
             }),
             getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 }),
             bridgeHealthCheck: async () => true
         });
-        await svc.getConnectionHealth();
         const result = await svc.getConnectionHealth();
         assert.equal(result.connectionState, 'active');
     });
 
-    it('stale mobile capture evidence cannot make active', async () => {
+    it('stale HTK-specific mobile evidence cannot make active', async () => {
         process.env.LAB_ADDON_CONNECTION_HEALTH_MOBILE_EVIDENCE_RECENT_MS = '1';
         const svc = new ConnectionHealthService({
             getAutomationHealth: () => ({
                 updatedAt: new Date().toISOString(),
-                lastNetworkInspection: { inspectedAt: '2020-01-01T00:00:00.000Z', activeNetworkMentionsVpn: true }
+                lastStartHeadless: {
+                    observedAt: '2020-01-01T00:00:00.000Z',
+                    evidence: { dumpsysVpnMentionsHttpToolkit: true }
+                }
             }),
             getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 }),
             bridgeHealthCheck: async () => true
@@ -182,6 +206,26 @@ describe('connection health service', () => {
         assert.notEqual(result.connectionState, 'active');
         assert.equal(result.nonFatalEvidence.includes('mobile-evidence-stale'), true);
         delete process.env.LAB_ADDON_CONNECTION_HEALTH_MOBILE_EVIDENCE_RECENT_MS;
+    });
+
+    it('control-plane alive + generic VPN evidence + JSONL not growing is non-disconnected and non-active', async () => {
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({
+                updatedAt: new Date().toISOString(),
+                lastNetworkInspection: {
+                    inspectedAt: new Date().toISOString(),
+                    activeNetworkMentionsVpn: true
+                }
+            }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 }),
+            bridgeHealthCheck: async () => true,
+            getDeviceLikelyConnected: async () => true
+        });
+        await svc.getConnectionHealth();
+        const result = await svc.getConnectionHealth();
+        assert.notEqual(result.connectionState, 'active');
+        assert.notEqual(result.connectionState, 'disconnected');
+        assert.ok(['idle', 'degraded', 'unknown'].includes(result.connectionState));
     });
 
     it('treats unparseable stop evidence as non-fatal', async () => {

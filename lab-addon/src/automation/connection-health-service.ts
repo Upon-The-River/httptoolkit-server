@@ -163,15 +163,42 @@ export class ConnectionHealthService {
         }
 
         const networkInspection = automation.lastNetworkInspection as Record<string, unknown> | undefined;
-        const inspectionTsRaw = typeof networkInspection?.inspectedAt === 'string' ? Date.parse(networkInspection.inspectedAt) : NaN;
-        const mobileEvidenceFresh = Number.isFinite(inspectionTsRaw) && (now.getTime() - inspectionTsRaw <= this.t.mobileEvidenceRecentMs);
         const vpn = (networkInspection?.vpn as Record<string, unknown> | undefined);
-        const mobileEvidenceSignal = networkInspection?.activeNetworkMentionsVpn === true
-            || vpn?.activeNetworkMentionsVpn === true
-            || networkInspection?.dumpsysVpnMentionsHttpToolkit === true
-            || networkInspection?.activityMentionsHttpToolkit === true;
-        const mobileCaptureRecent = mobileEvidenceFresh && mobileEvidenceSignal;
-        if (mobileEvidenceSignal && !mobileEvidenceFresh) nonFatalEvidence.push('mobile-evidence-stale');
+        const observedStates = Array.isArray(networkInspection?.observedStates) ? networkInspection?.observedStates : [];
+        const observedStatesContainHtkSpecificSignal = observedStates.some((value) =>
+            value === 'activity-app-visible' || value === 'vpn-owner-signal' || value === 'proxyvpnrunnable'
+        );
+
+        const htkSpecificFromNetworkInspection = networkInspection?.dumpsysVpnMentionsHttpToolkit === true
+            || networkInspection?.activityMentionsHttpToolkit === true
+            || networkInspection?.proxyVpnRunnableSeen === true
+            || observedStatesContainHtkSpecificSignal;
+        const genericVpnEvidence = networkInspection?.activeNetworkMentionsVpn === true
+            || vpn?.activeNetworkMentionsVpn === true;
+
+        const inspectionTsRaw = typeof networkInspection?.inspectedAt === 'string' ? Date.parse(networkInspection.inspectedAt) : NaN;
+        const networkInspectionEvidenceFresh = Number.isFinite(inspectionTsRaw) && (now.getTime() - inspectionTsRaw <= this.t.mobileEvidenceRecentMs);
+
+        const lastStartHeadless = automation.lastStartHeadless as Record<string, unknown> | undefined;
+        const lastStartHeadlessEvidence = (lastStartHeadless?.evidence as Record<string, unknown> | undefined);
+        const lastStartHeadlessTsRaw = typeof lastStartHeadless?.observedAt === 'string' ? Date.parse(lastStartHeadless.observedAt as string) : NaN;
+        const lastStartHeadlessEvidenceFresh = Number.isFinite(lastStartHeadlessTsRaw)
+            && (now.getTime() - lastStartHeadlessTsRaw <= this.t.mobileEvidenceRecentMs);
+        const htkSpecificFromLastStartHeadless = lastStartHeadlessEvidence?.dumpsysVpnMentionsHttpToolkit === true
+            || lastStartHeadlessEvidence?.activityMentionsHttpToolkit === true
+            || lastStartHeadlessEvidence?.proxyVpnRunnableSeen === true;
+
+        const hasFreshHtkSpecificMobileEvidence = (htkSpecificFromNetworkInspection && networkInspectionEvidenceFresh)
+            || (htkSpecificFromLastStartHeadless && lastStartHeadlessEvidenceFresh);
+        const hasAnyHtkSpecificMobileEvidence = htkSpecificFromNetworkInspection || htkSpecificFromLastStartHeadless;
+        const mobileCaptureRecent = hasFreshHtkSpecificMobileEvidence;
+
+        if (hasAnyHtkSpecificMobileEvidence && !hasFreshHtkSpecificMobileEvidence) {
+            nonFatalEvidence.push('mobile-evidence-stale');
+        }
+        if (genericVpnEvidence && !hasAnyHtkSpecificMobileEvidence) {
+            nonFatalEvidence.push('generic-vpn-evidence-not-htk-specific');
+        }
 
         const hasStrongFailure = disconnectEvidence.length > 0;
         if (hasStrongFailure) {

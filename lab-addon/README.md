@@ -102,6 +102,12 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:45458/automation/android-a
 
 Bridge responses now include bootstrap preparation details (`bootstrapRulesApplied`, `bootstrapResult`) and a warning that VPN/data-plane success must be verified separately.
 
+Connection-health mobile evidence rule:
+
+- Generic Android VPN/TUN/provider mentions (including `activeNetworkMentionsVpn` / `VpnNetworkProvider`) are auxiliary evidence only.
+- `active` state requires fresh HTTP Toolkit-specific mobile evidence (for example `dumpsysVpnMentionsHttpToolkit`, `activityMentionsHttpToolkit`, `proxyVpnRunnableSeen`) or independent data-plane/target/probe evidence.
+- Generic VPN evidence alone does not prove HTTP Toolkit capture is active.
+
 Proxy bootstrap validation check (PowerShell):
 
 ```powershell
