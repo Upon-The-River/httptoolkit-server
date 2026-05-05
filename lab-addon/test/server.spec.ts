@@ -748,6 +748,27 @@ describe('lab addon service endpoints', () => {
         delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
     });
 
+    it('bridge health check uses LAB_ADDON_OFFICIAL_ADMIN_BASE_URL', async () => {
+        const originalFetch = globalThis.fetch;
+        const calls: string[] = [];
+        process.env.LAB_ADDON_OFFICIAL_ADMIN_BASE_URL = 'http://127.0.0.1:59999';
+        globalThis.fetch = (async (input: string | URL | Request) => {
+            calls.push(String(input));
+            throw new Error('refused');
+        }) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp({
+                androidNetworkSafety: baseAndroidSafety,
+                sessionManager: automationSessionManager
+            }));
+            await originalFetch(`${baseUrl}/automation/connection-health`);
+            assert.equal(calls.some((url) => url === 'http://127.0.0.1:59999/automation/health'), true);
+        } finally {
+            globalThis.fetch = originalFetch;
+            delete process.env.LAB_ADDON_OFFICIAL_ADMIN_BASE_URL;
+        }
+    });
+
     it('POST /automation/android-adb/wait-for-target-traffic returns structured timeout', async () => {
         const { baseUrl } = await startTestServer(createApp({
             androidNetworkSafety: baseAndroidSafety,

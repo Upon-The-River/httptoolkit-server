@@ -479,6 +479,11 @@ Compatibility notes & current limitations:
 - 无流量但 control-plane/device evidence 正常时，应显示 `idle`，不是 `disconnected`。
 - `bridge-unreachable` 属于 control-plane degraded / nonFatalEvidence，不能单独触发 `disconnected`。
 - `disconnected` 只应由真正强失败证据并持续超过阈值触发，例如：`device-offline`、`active-probe-failed`、session registry 明确 `stopped` 且没有更新的 successful start、proxy/data-plane 主动探测明确失败、多个关键证据同时失败。
+- `active` 不能由 `controlPlaneAlive=true` 单独触发；仅可由 data-plane/target-traffic/active probe/新鲜 mobile-capture evidence 触发。
+- `control-plane alive` 但没有 data-plane/mobile evidence 时应为 `idle`（或证据不足时 `unknown`），不是 `active`。
+- `safeStub=true` 或 `implemented=false` 的 stop/recover 结果不能作为真实 session-stopped 断线证据。
+- official bridge `POST /automation/android-adb/start-headless` 超时/5xx/网络错误会回退到 ADB intent 流程；不会吞掉 fallback。
+- bridge health check 与 activation client 对齐，读取 `LAB_ADDON_OFFICIAL_ADMIN_BASE_URL`（默认 `http://127.0.0.1:45458`）。
 - JSONL 不增长仍然不能作为 `disconnected` evidence。
 
 端口职责：

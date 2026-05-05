@@ -115,6 +115,30 @@ describe('AdbAndroidActivationClient', () => {
         assert.equal((result.details as any).reason, 'missing-official-activation-bridge');
     });
 
+    it('official bridge 503 falls back to ADB flow', async () => {
+        const fakeAdb = new FakeAdbExecutor(['device-1'], () => '');
+        const fakeFetch: typeof fetch = (async () => new Response('busy', { status: 503 })) as typeof fetch;
+        const client = new AdbAndroidActivationClient(fakeAdb, fakeFetch);
+        await client.activateDeviceCapture({ deviceId: 'device-1', proxyPort: 9001, enableSocks: false });
+        assert.equal(fakeAdb.shellCalls.length > 0, true);
+    });
+
+    it('official bridge timeout falls back to ADB flow', async () => {
+        process.env.LAB_ADDON_OFFICIAL_BRIDGE_START_TIMEOUT_MS = '5';
+        const fakeAdb = new FakeAdbExecutor(['device-1'], () => '');
+        const fakeFetch: typeof fetch = (async (_url, init) => {
+            await new Promise((_, reject) => {
+                const signal = (init as RequestInit)?.signal as AbortSignal;
+                signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+            });
+            return new Response();
+        }) as typeof fetch;
+        const client = new AdbAndroidActivationClient(fakeAdb, fakeFetch);
+        await client.activateDeviceCapture({ deviceId: 'device-1', proxyPort: 9001, enableSocks: false });
+        assert.equal(fakeAdb.shellCalls.length > 0, true);
+        delete process.env.LAB_ADDON_OFFICIAL_BRIDGE_START_TIMEOUT_MS;
+    });
+
     it('official bridge structured failure returns bridge error details', async () => {
         const fakeAdb = new FakeAdbExecutor(['device-1'], () => '');
         const fakeFetch: typeof fetch = (async () =>

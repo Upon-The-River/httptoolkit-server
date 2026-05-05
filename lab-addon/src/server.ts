@@ -96,10 +96,12 @@ export function createApp(options: CreateAppOptions = {}): Express {
         bridgeHealthCheck: async () => {
             const timeoutRaw = Number(process.env.LAB_ADDON_CONNECTION_HEALTH_BRIDGE_TIMEOUT_MS);
             const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : 500;
+            const baseUrl = process.env.LAB_ADDON_OFFICIAL_ADMIN_BASE_URL ?? 'http://127.0.0.1:45458';
+            const healthUrl = `${baseUrl.replace(/\/$/, '')}/automation/health`;
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), timeoutMs);
             try {
-                const response = await fetch('http://127.0.0.1:45458/automation/health', {
+                const response = await fetch(healthUrl, {
                     method: 'GET',
                     signal: controller.signal
                 });

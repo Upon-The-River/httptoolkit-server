@@ -33,7 +33,7 @@ export interface ConnectionHealthSnapshot {
     staleReason: string | null;
 }
 
-interface Thresholds { dataPlaneRecentMs:number; controlPlaneStaleMs:number; deviceStaleMs:number; disconnectedMs:number; bridgeTimeoutMs:number }
+interface Thresholds { dataPlaneRecentMs:number; controlPlaneStaleMs:number; deviceStaleMs:number; disconnectedMs:number; bridgeTimeoutMs:number; mobileEvidenceRecentMs:number }
 
 const parseMs = (name: string, fallback: number, warnings: string[]): number => {
     const raw = process.env[name];
@@ -71,7 +71,8 @@ export class ConnectionHealthService {
             controlPlaneStaleMs: parseMs('LAB_ADDON_CONNECTION_HEALTH_CONTROL_PLANE_STALE_MS', 10 * 60 * 1000, this.thresholdsBaseWarnings),
             deviceStaleMs: parseMs('LAB_ADDON_CONNECTION_HEALTH_DEVICE_STALE_MS', 10 * 60 * 1000, this.thresholdsBaseWarnings),
             disconnectedMs: parseMs('LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS', 30 * 60 * 1000, this.thresholdsBaseWarnings),
-            bridgeTimeoutMs: parseMs('LAB_ADDON_CONNECTION_HEALTH_BRIDGE_TIMEOUT_MS', 500, this.thresholdsBaseWarnings)
+            bridgeTimeoutMs: parseMs('LAB_ADDON_CONNECTION_HEALTH_BRIDGE_TIMEOUT_MS', 500, this.thresholdsBaseWarnings),
+            mobileEvidenceRecentMs: parseMs('LAB_ADDON_CONNECTION_HEALTH_MOBILE_EVIDENCE_RECENT_MS', 120000, this.thresholdsBaseWarnings)
         };
     }
 
@@ -108,9 +109,9 @@ export class ConnectionHealthService {
         try {
             deviceLikelyConnected = this.deps.getDeviceLikelyConnected ? await this.deps.getDeviceLikelyConnected() : null;
         } catch {
-            warnings.push('device-evidence-unavailable');
+            nonFatalEvidence.push('device-evidence-unavailable');
         }
-        if (deviceLikelyConnected === null) warnings.push('vpn-evidence-unavailable');
+        if (!this.deps.getDeviceLikelyConnected) nonFatalEvidence.push('device-evidence-not-configured');
         if (deviceLikelyConnected) this.lastDeviceEvidenceAt = observedAt;
 
         const targetRecent = this.lastTargetTrafficObservedAt && (now.getTime() - Date.parse(this.lastTargetTrafficObservedAt) <= this.t.dataPlaneRecentMs);
@@ -140,18 +141,37 @@ export class ConnectionHealthService {
         };
 
         const stopTs = parseObservedAt(automation.lastStopHeadless);
+        const recoverTs = parseObservedAt(automation.lastRecoverHeadless);
         const successfulStartTs = Math.max(
             parseObservedAt(automation.lastSuccessfulStartHeadless) ?? Number.NEGATIVE_INFINITY,
-            parseObservedAt(automation.lastControlPlaneSuccessfulStartHeadless) ?? Number.NEGATIVE_INFINITY
+            parseObservedAt(automation.lastControlPlaneSuccessfulStartHeadless) ?? Number.NEGATIVE_INFINITY,
+            (recoverTs !== null && (automation.lastRecoverHeadless as { success?: unknown })?.success === true
+                && (automation.lastRecoverHeadless as { safeStub?: unknown })?.safeStub !== true
+                && (automation.lastRecoverHeadless as { implemented?: unknown })?.implemented !== false) ? recoverTs : Number.NEGATIVE_INFINITY
         );
 
         if (automation.lastStopHeadless) {
             if (stopTs === null) {
                 nonFatalEvidence.push('session-stop-evidence-unparseable');
-            } else if (stopTs > successfulStartTs) {
+            } else if ((automation.lastStopHeadless as { safeStub?: unknown }).safeStub === true) {
+                nonFatalEvidence.push('stop-safe-stub-ignored');
+            } else if ((automation.lastStopHeadless as { implemented?: unknown }).implemented === false) {
+                nonFatalEvidence.push('stop-not-implemented-ignored');
+            } else if (stopTs > successfulStartTs && (automation.lastStopHeadless as { success?: unknown }).success === true) {
                 disconnectEvidence.push('session-stopped');
             }
         }
+
+        const networkInspection = automation.lastNetworkInspection as Record<string, unknown> | undefined;
+        const inspectionTsRaw = typeof networkInspection?.inspectedAt === 'string' ? Date.parse(networkInspection.inspectedAt) : NaN;
+        const mobileEvidenceFresh = Number.isFinite(inspectionTsRaw) && (now.getTime() - inspectionTsRaw <= this.t.mobileEvidenceRecentMs);
+        const vpn = (networkInspection?.vpn as Record<string, unknown> | undefined);
+        const mobileEvidenceSignal = networkInspection?.activeNetworkMentionsVpn === true
+            || vpn?.activeNetworkMentionsVpn === true
+            || networkInspection?.dumpsysVpnMentionsHttpToolkit === true
+            || networkInspection?.activityMentionsHttpToolkit === true;
+        const mobileCaptureRecent = mobileEvidenceFresh && mobileEvidenceSignal;
+        if (mobileEvidenceSignal && !mobileEvidenceFresh) nonFatalEvidence.push('mobile-evidence-stale');
 
         const hasStrongFailure = disconnectEvidence.length > 0;
         if (hasStrongFailure) {
@@ -168,7 +188,7 @@ export class ConnectionHealthService {
         let state: ConnectionState = 'unknown';
         if (hasStrongFailure && enoughTime) {
             state = 'disconnected';
-        } else if (positiveGrowth || targetRecent || dataPlaneRecent || this.lastActiveProbeOk === true || (controlPlaneAlive && deviceLikelyConnected !== false && !hasStrongFailure)) {
+        } else if (positiveGrowth || targetRecent || dataPlaneRecent || this.lastActiveProbeOk === true || mobileCaptureRecent) {
             state = staleControlPlane && (positiveGrowth || targetRecent || dataPlaneRecent) ? 'degraded' : 'active';
         } else if (!staleControlPlane && (controlPlaneAlive !== false) && (deviceLikelyConnected !== false) && this.lastActiveProbeOk !== false) {
             state = 'idle';
