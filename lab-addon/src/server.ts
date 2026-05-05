@@ -66,6 +66,35 @@ const asyncHandler = (handler: (req: Request, res: Response, next: NextFunction)
     };
 };
 
+const hasStructuredBridgeHealthBlock = (payload: Record<string, unknown>): boolean => {
+    return Object.prototype.hasOwnProperty.call(payload, 'capabilities')
+        || Object.prototype.hasOwnProperty.call(payload, 'routes')
+        || Object.prototype.hasOwnProperty.call(payload, 'androidAdbStartHeadless');
+};
+
+const pickLatestSessionSourceEvidence = (automationHealth: Record<string, unknown>): { sessionSource: string } | null => {
+    const entries = [
+        automationHealth?.lastStartHeadless,
+        automationHealth?.lastControlPlaneSuccessfulStartHeadless,
+        automationHealth?.lastSuccessfulStartHeadless
+    ].map((entry) => entry as Record<string, unknown> | undefined).filter((entry) => typeof entry?.sessionSource === 'string');
+
+    if (entries.length === 0) return null;
+
+    const parsed = entries
+        .map((entry) => ({
+            sessionSource: entry?.sessionSource as string,
+            parsedObservedAt: typeof entry?.observedAt === 'string' ? Date.parse(entry.observedAt) : Number.NaN
+        }));
+
+    const withTimestamp = parsed
+        .filter((entry) => Number.isFinite(entry.parsedObservedAt))
+        .sort((a, b) => (b.parsedObservedAt as number) - (a.parsedObservedAt as number));
+
+    if (withTimestamp.length > 0) return { sessionSource: withTimestamp[0].sessionSource };
+    return { sessionSource: parsed[0].sessionSource };
+};
+
 export function createApp(options: CreateAppOptions = {}): Express {
     const app = express();
     const sessionManager = options.sessionManager ?? new SessionManager();
@@ -131,6 +160,9 @@ export function createApp(options: CreateAppOptions = {}): Express {
                 if (falseSignals.some(Boolean)) {
                     return false;
                 }
+                if (hasStructuredBridgeHealthBlock(payload)) {
+                    return false;
+                }
                 return true;
             } catch {
                 return false;
@@ -186,16 +218,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     app.post('/session/target-signal', asyncHandler(async (req: Request, res: Response) => {
         const automationHealth = automationService.getHealth() as Record<string, unknown>;
-        const startEvidence = [
-            automationHealth?.lastStartHeadless,
-            automationHealth?.lastControlPlaneSuccessfulStartHeadless,
-            automationHealth?.lastSuccessfulStartHeadless
-        ];
-        const bridgeModeEvidenceFound = startEvidence.some((entry) => {
-            const asRecord = entry as Record<string, unknown> | undefined;
-            return asRecord?.sessionSource === 'official-bridge';
-        });
-        if (bridgeModeEvidenceFound) {
+        const latestSessionSourceEvidence = pickLatestSessionSourceEvidence(automationHealth);
+        if (latestSessionSourceEvidence?.sessionSource === 'official-bridge') {
             res.json({
                 observed: false,
                 unavailable: true,

@@ -102,6 +102,11 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:45458/automation/android-a
 
 Bridge responses now include bootstrap preparation details (`bootstrapRulesApplied`, `bootstrapResult`) and a warning that VPN/data-plane success must be verified separately.
 
+Bridge health interpretation notes:
+
+- Legacy `/automation/health` payloads without structured capability blocks (`capabilities`, `routes`, `androidAdbStartHeadless`) can still be accepted as healthy when they do not explicitly report failure.
+- Structured capability blocks with no explicit start-headless true signal are treated as not healthy (for example `capabilities:{}`, `routes:{}`, or `androidAdbStartHeadless:{}`).
+
 Connection-health mobile evidence rule:
 
 - Generic Android VPN/TUN/provider mentions (including `activeNetworkMentionsVpn` / `VpnNetworkProvider`) are auxiliary evidence only.
@@ -504,3 +509,4 @@ Compatibility notes & current limitations:
 - Bridge health parsing inspects structured body and start-headless capability; HTTP `ok` alone is not authoritative.
 - `POST /automation/android-adb/start-headless` supports optional wait tuning fields: `trafficWaitTimeoutMs`, `trafficWaitPollMs`, `targetTrafficWaitTimeoutMs`, `targetTrafficWaitPollMs`.
 - `POST /session/target-signal` reflects addon self-session pass-through evidence. In official-bridge mode it may return unavailable; watchdogs should rely on `/automation/connection-health` and `/export/output-status`.
+- For mixed official-bridge/self-session history, `target-signal` availability is determined by the latest parseable `observedAt` session evidence; stale official-bridge evidence must not mask newer addon self-session evidence.
