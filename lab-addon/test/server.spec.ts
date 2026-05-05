@@ -1381,3 +1381,173 @@ describe('export output path env integration', () => {
         });
     });
 });
+
+describe('bridge health and target-signal bridge mode semantics', () => {
+    it('bridge health parser marks capabilities.androidAdbStartHeadless=true as controlPlaneAlive=true', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({
+            ok: true,
+            capabilities: { androidAdbStartHeadless: true }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, true);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
+    it('bridge health parser marks route true as controlPlaneAlive=true', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({
+            ok: true,
+            routes: { '/automation/android-adb/start-headless': true }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, true);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
+    it('target-signal keeps self-session behavior when not in bridge mode', async () => {
+        let called = false;
+        const sessionManager: SessionManagerLike = {
+            startSessionIfNeeded: async () => ({ created: false, proxyPort: 8000, sessionUrl: 'http://127.0.0.1:8000' }),
+            getLatestSession: () => ({ active: false }),
+            stopLatestSession: async () => ({ stopped: false }),
+            getObservedTrafficSignal: async () => ({ observed: false, source: 'none', totalSeenRequests: 0, ignoredBootstrapRequests: 0, matchingRequests: 0 }),
+            getTargetTrafficSignal: async () => {
+                called = true;
+                return { observed: false, source: 'none', totalSeenRequests: 0, ignoredBootstrapRequests: 0, matchingRequests: 0 };
+            }
+        };
+        const automationService = { getHealth: () => ({}) } as any;
+        const { baseUrl } = await startTestServer(createApp({ sessionManager, automationService }));
+        const response = await fetch(`${baseUrl}/session/target-signal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        const body = await response.json();
+        assert.equal(called, true);
+        assert.equal(body.unavailable, undefined);
+        assert.equal(body.observed, false);
+    });
+    it('bridge health parser marks capability false as controlPlaneAlive=false', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({
+            ok: true,
+            capabilities: { androidAdbStartHeadless: false }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, false);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
+    it('bridge health parser treats legacy 200 body without capability block as controlPlaneAlive=true', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true, service: 'legacy-bridge' }), {
+            status: 200, headers: { 'content-type': 'application/json' }
+        })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, true);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
+    it('target-signal returns unavailable in bridge mode from lastControlPlaneSuccessfulStartHeadless', async () => {
+        const automationActivationClient: AndroidActivationClient = {
+            activateDeviceCapture: async () => ({ success: true, details: { bridgeResponse: { success: true, controlPlaneSuccess: true } } }),
+            stopDeviceCapture: async () => ({ success: true, implemented: true, safeStub: false, details: {}, errors: [] }),
+            recoverDeviceCapture: async () => ({ success: true, implemented: true, safeStub: false, details: {}, errors: [] })
+        };
+        const { baseUrl } = await startTestServer(createApp({ automationActivationClient }));
+        await fetch(`${baseUrl}/automation/android-adb/start-headless`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ deviceId: 'device-1' })
+        });
+        const response = await fetch(`${baseUrl}/session/target-signal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        const body = await response.json();
+        assert.equal(body.unavailable, true);
+        assert.equal(body.reason, 'target-signal-unavailable-in-bridge-mode');
+    });
+
+    it('bridge health parser marks ok:false as controlPlaneAlive=false', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({ ok: false }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+        })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, false);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
+    it('bridge health parser marks androidAdbStartHeadless.implemented=false as controlPlaneAlive=false', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response(JSON.stringify({
+            ok: true,
+            androidAdbStartHeadless: { implemented: false }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, false);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
+    it('bridge health parser handles non-JSON 200 without throw and reports controlPlaneAlive=false', async () => {
+        const prevFetch = globalThis.fetch;
+        globalThis.fetch = (async () => new Response('not-json', { status: 200 })) as typeof fetch;
+        try {
+            const { baseUrl } = await startTestServer(createApp());
+            const response = await prevFetch(`${baseUrl}/automation/connection-health`);
+            const body = await response.json();
+            assert.equal(body.controlPlaneAlive, false);
+        } finally {
+            globalThis.fetch = prevFetch;
+        }
+    });
+
+    it('target-signal returns unavailable in bridge mode from lastSuccessfulStartHeadless', async () => {
+        const automationService = {
+            getHealth: () => ({ lastSuccessfulStartHeadless: { sessionSource: 'official-bridge' } })
+        } as any;
+        const { baseUrl } = await startTestServer(createApp({ automationService }));
+        const response = await fetch(`${baseUrl}/session/target-signal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        const body = await response.json();
+        assert.equal(body.unavailable, true);
+        assert.equal(body.reason, 'target-signal-unavailable-in-bridge-mode');
+    });
+
+    it('target-signal returns unavailable in bridge mode from lastStartHeadless when overallSuccess=false', async () => {
+        const automationService = {
+            getHealth: () => ({ lastStartHeadless: { sessionSource: 'official-bridge', overallSuccess: false } })
+        } as any;
+        const { baseUrl } = await startTestServer(createApp({ automationService }));
+        const response = await fetch(`${baseUrl}/session/target-signal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        const body = await response.json();
+        assert.equal(body.unavailable, true);
+        assert.equal(body.reason, 'target-signal-unavailable-in-bridge-mode');
+    });
+});

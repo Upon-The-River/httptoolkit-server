@@ -46,7 +46,37 @@ describe('AdbAndroidActivationClient', () => {
 
         assert.equal(result.success, true);
         assert.equal((result.details as any).activationMode, 'official-bridge');
+        assert.equal((result.details as any).bridgeResponse.bridgeControlPlaneSuccess, true);
         assert.equal(fetchCalls[0], 'http://127.0.0.1:45458/automation/android-adb/start-headless');
+        assert.equal(fakeAdb.shellCalls.length, 0);
+    });
+
+    it('treats legacy bridge { success:true } as success without ADB fallback', async () => {
+        const fakeAdb = new FakeAdbExecutor(['device-1'], () => '');
+        const fakeFetch: typeof fetch = (async () => new Response(JSON.stringify({
+            success: true
+        }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+        })) as typeof fetch;
+        const client = new AdbAndroidActivationClient(fakeAdb, fakeFetch);
+        const result = await client.activateDeviceCapture({ deviceId: 'device-1', proxyPort: 8000, enableSocks: false });
+        assert.equal(result.success, true);
+        assert.equal((result.details as any).bridgeResponse.bridgeActivationSuccess, true);
+        assert.equal((result.details as any).bridgeResponse.bridgeLegacySuccess, true);
+        assert.equal((result.details as any).bridgeResponse.bridgeControlPlaneUnknown, true);
+        assert.equal(fakeAdb.shellCalls.length, 0);
+    });
+
+    it('legacy bridge success: success:true without controlPlaneSuccess does not fallback to ADB', async () => {
+        const fakeAdb = new FakeAdbExecutor(['device-1'], () => '');
+        const fakeFetch: typeof fetch = (async () => new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+        })) as typeof fetch;
+        const client = new AdbAndroidActivationClient(fakeAdb, fakeFetch);
+        const result = await client.activateDeviceCapture({ deviceId: 'device-1', proxyPort: 8000, enableSocks: false });
+        assert.equal(result.success, true);
         assert.equal(fakeAdb.shellCalls.length, 0);
     });
 
@@ -70,6 +100,8 @@ describe('AdbAndroidActivationClient', () => {
         assert.equal(result.success, false);
         assert.equal((result.details as any).activationMode, 'partial');
         assert.equal(result.errors?.includes('official-bridge-failed'), true);
+        assert.equal((result.details as any).bridgeResponse.bridgeLegacySuccess, false);
+        assert.equal((result.details as any).bridgeResponse.bridgeControlPlaneSuccess, false);
     });
 
     it('official bridge 404 falls back to partial adb intent mode', async () => {

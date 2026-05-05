@@ -285,7 +285,8 @@ export class AndroidAdbStartHeadlessService {
         const bridgeLegacySuccess = bridgeResponse?.bridgeLegacySuccess === true || bridgeControlPlaneUnknown;
         const bridgeControlPlaneSuccess = bridgeResponse?.bridgeControlPlaneSuccess === true || bridgeResponse?.controlPlaneSuccess === true || bridgeLegacySuccess;
         const usedOfficialBridge = bridgeResponse !== undefined;
-        const shouldSkipAddonSessionStart = bridgeResponse?.shouldSkipAddonSessionStart === true || (usedOfficialBridge && bridgeActivationSuccess);
+        const shouldSkipAddonSessionStart = bridgeResponse?.shouldSkipAddonSessionStart === true
+            || (usedOfficialBridge && bridgeControlPlaneSuccess);
 
         let localSession: Awaited<ReturnType<SessionManagerLike['startSessionIfNeeded']>> | undefined;
         if (!shouldSkipAddonSessionStart) {

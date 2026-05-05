@@ -112,11 +112,24 @@ export function createApp(options: CreateAppOptions = {}): Express {
                 const capabilities = payload.capabilities as Record<string, unknown> | undefined;
                 const routeMap = payload.routes as Record<string, unknown> | undefined;
                 const androidBlock = payload.androidAdbStartHeadless as Record<string, unknown> | undefined;
-                if (capabilities) {
-                    return capabilities.androidAdbStartHeadless === true
-                        || capabilities.startHeadless === true
-                        || androidBlock?.implemented === true
-                        || routeMap?.['/automation/android-adb/start-headless'] === true;
+                const trueSignals = [
+                    capabilities?.androidAdbStartHeadless === true,
+                    capabilities?.startHeadless === true,
+                    androidBlock?.implemented === true,
+                    routeMap?.['/automation/android-adb/start-headless'] === true
+                ];
+                if (trueSignals.some(Boolean)) {
+                    return true;
+                }
+
+                const falseSignals = [
+                    capabilities?.androidAdbStartHeadless === false,
+                    capabilities?.startHeadless === false,
+                    androidBlock?.implemented === false,
+                    routeMap?.['/automation/android-adb/start-headless'] === false
+                ];
+                if (falseSignals.some(Boolean)) {
+                    return false;
                 }
                 return true;
             } catch {
@@ -173,9 +186,16 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
     app.post('/session/target-signal', asyncHandler(async (req: Request, res: Response) => {
         const automationHealth = automationService.getHealth() as Record<string, unknown>;
-        const latestSuccessfulStart = automationHealth?.lastSuccessfulStartHeadless as Record<string, unknown> | undefined;
-        const sessionSource = latestSuccessfulStart?.sessionSource;
-        if (sessionSource === 'official-bridge') {
+        const startEvidence = [
+            automationHealth?.lastStartHeadless,
+            automationHealth?.lastControlPlaneSuccessfulStartHeadless,
+            automationHealth?.lastSuccessfulStartHeadless
+        ];
+        const bridgeModeEvidenceFound = startEvidence.some((entry) => {
+            const asRecord = entry as Record<string, unknown> | undefined;
+            return asRecord?.sessionSource === 'official-bridge';
+        });
+        if (bridgeModeEvidenceFound) {
             res.json({
                 observed: false,
                 unavailable: true,

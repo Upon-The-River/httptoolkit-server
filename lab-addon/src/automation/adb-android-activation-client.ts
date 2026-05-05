@@ -137,7 +137,7 @@ export class AdbAndroidActivationClient implements AndroidActivationClient {
                     bridgeControlPlaneUnknown,
                     bridgeLegacySuccess,
                     usedOfficialBridge: true,
-                    shouldSkipAddonSessionStart: bridgeSuccess
+                    shouldSkipAddonSessionStart: effectiveSuccess
                 }
             },
             errors: effectiveSuccess ? [] : ['official-bridge-failed']
