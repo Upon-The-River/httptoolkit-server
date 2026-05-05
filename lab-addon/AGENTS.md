@@ -29,6 +29,8 @@ Forbidden:
 
 2. mobile-capture evidence
    - e.g. fresh VPN evidence, HTTP Toolkit activity evidence, ADB device online.
+   - generic Android VPN/TUN/provider mentions (e.g. `activeNetworkMentionsVpn`, `VpnNetworkProvider`) are supportive only and are not HTK-specific capture proof.
+   - `active` requires fresh HTK-specific mobile signals (e.g. HttpToolkit mentions/proxy runnable) or data-plane/target/probe evidence.
    - must include timestamp and expires after recency window.
 
 3. passive data-plane evidence
@@ -71,6 +73,7 @@ disconnected:
 - JSONL not growing => only idle/no recent traffic, not disconnected.
 - bridge-unreachable => control-plane degraded/non-fatal evidence only, not disconnected alone.
 - control-plane alive => idle/ready only, not active alone.
+- `activeNetworkMentionsVpn` cannot trigger `active` by itself; treat as auxiliary generic VPN evidence only.
 - stop/recover with `safeStub=true` or `implemented=false` cannot be used as real state-transition evidence.
 - stop evidence is valid only when newer than latest successful start/recover evidence.
 - successful recover must clear prior stop failure chain.
