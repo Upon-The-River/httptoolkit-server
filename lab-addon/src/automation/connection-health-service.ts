@@ -31,6 +31,7 @@ export interface ConnectionHealthSnapshot {
     nonFatalEvidence: string[];
     warnings: string[];
     staleReason: string | null;
+    idleReason: string | null;
     automationHealthStale: boolean;
     automationHealthUpdatedAt: string | null;
     lastSuccessfulStartObservedAt: string | null;
@@ -225,7 +226,16 @@ export class ConnectionHealthService {
             nonFatalEvidence.push('automation-health-stale-but-data-plane-active');
         }
 
+        const hasControlPlaneOrDeviceAnomaly = nonFatalEvidence.some((e) => e === 'bridge-unreachable' || e === 'device-offline');
+        const hasDataPlaneSignals = positiveGrowth || targetRecent || dataPlaneRecent;
+        const hasFreshActiveSignal = hasDataPlaneSignals || this.lastActiveProbeOk === true || mobileCaptureRecent;
+        const idleOnHealthyControlPlane = controlPlaneAlive === true
+            && deviceLikelyConnected !== false
+            && !hasStrongFailure
+            && !hasFreshActiveSignal;
+
         let state: ConnectionState = 'unknown';
+        let idleReason: string | null = null;
         if (hasStrongFailure && enoughTime) {
             state = 'disconnected';
         } else if (hasActivePositiveEvidence) {
@@ -235,15 +245,18 @@ export class ConnectionHealthService {
             } else {
                 state = 'active';
             }
-        } else if (controlPlaneAlive === true && deviceLikelyConnected !== false && !hasStrongFailure) {
+        } else if (idleOnHealthyControlPlane) {
             state = 'idle';
-            if (automationHealthStale) {
-                state = 'stale';
-                staleReason = 'automation-health-stale';
-            }
-        } else if (!hasStrongFailure && (automationHealthStale || nonFatalEvidence.some((e) => e === 'bridge-unreachable' || e === 'device-offline'))) {
-            state = automationHealthStale ? 'stale' : 'degraded';
-            staleReason = automationHealthStale ? 'automation-health-stale' : (nonFatalEvidence.includes('bridge-unreachable') ? 'bridge-unreachable' : 'device-offline');
+            idleReason = automationHealthStale
+                ? 'automation-health-stale-no-recent-data-plane'
+                : 'no-recent-data-plane';
+            if (automationHealthStale) staleReason = 'automation-health-stale';
+        } else if (!hasStrongFailure && automationHealthStale && (controlPlaneAlive !== true || hasControlPlaneOrDeviceAnomaly)) {
+            state = 'stale';
+            staleReason = 'automation-health-stale';
+        } else if (!hasStrongFailure && hasControlPlaneOrDeviceAnomaly) {
+            state = 'degraded';
+            staleReason = nonFatalEvidence.includes('bridge-unreachable') ? 'bridge-unreachable' : 'device-offline';
         }
 
         const passiveDataPlaneObserved = positiveGrowth;
@@ -280,6 +293,7 @@ export class ConnectionHealthService {
             nonFatalEvidence,
             warnings,
             staleReason,
+            idleReason,
             automationHealthStale,
             automationHealthUpdatedAt: updatedAtRaw,
             lastSuccessfulStartObservedAt,
