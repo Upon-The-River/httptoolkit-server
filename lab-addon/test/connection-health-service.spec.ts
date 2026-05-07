@@ -36,7 +36,7 @@ describe('connection health service', () => {
         assert.notEqual(result.connectionState, 'disconnected');
     });
 
-    it('control-plane stale but data-plane active is not disconnected', async () => {
+    it('automation health stale but data-plane active is degraded with renamed evidence', async () => {
         let size = 100;
         const svc = new ConnectionHealthService({
             getAutomationHealth: () => ({ updatedAt: new Date(0).toISOString() }),
@@ -45,19 +45,67 @@ describe('connection health service', () => {
         await svc.getConnectionHealth();
         size = 130;
         const result = await svc.getConnectionHealth();
-        assert.ok(['active', 'degraded'].includes(result.connectionState));
-        assert.equal(result.nonFatalEvidence.includes('control-plane-stale-but-data-plane-active'), true);
+        assert.equal(result.connectionState, 'degraded');
+        assert.equal(result.nonFatalEvidence.includes('automation-health-stale-but-data-plane-active'), true);
+        assert.equal(result.nonFatalEvidence.includes('control-plane-stale-but-data-plane-active'), false);
         assert.notEqual(result.connectionState, 'disconnected');
     });
 
-    it('stale control-plane without failures is not disconnected', async () => {
+    it('automation health stale without data-plane is stale', async () => {
         const svc = new ConnectionHealthService({
             getAutomationHealth: () => ({ updatedAt: new Date(0).toISOString() }),
             getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 })
         });
         const result = await svc.getConnectionHealth();
-        assert.ok(['stale', 'degraded', 'unknown'].includes(result.connectionState));
+        assert.equal(result.connectionState, 'stale');
+        assert.equal(result.automationHealthStale, true);
+        assert.equal(result.staleReason, 'automation-health-stale');
         assert.notEqual(result.connectionState, 'disconnected');
+    });
+
+
+
+    it('no recent traffic with healthy control-plane is idle, not stale', async () => {
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({ updatedAt: new Date().toISOString() }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 120 }),
+            bridgeHealthCheck: async () => true,
+            getDeviceLikelyConnected: async () => null
+        });
+        await svc.getConnectionHealth();
+        const result = await svc.getConnectionHealth();
+        assert.equal(result.connectionState, 'idle');
+        assert.equal(result.dataPlaneIdle, true);
+        assert.equal(result.passiveDataPlaneObserved, false);
+        assert.deepEqual(result.disconnectEvidence, []);
+        assert.notEqual(result.connectionState, 'stale');
+        assert.notEqual(result.connectionState, 'degraded');
+    });
+
+    it('control-plane alive must not produce control-plane-stale evidence', async () => {
+        let size = 10;
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({ updatedAt: new Date(0).toISOString() }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: size }),
+            bridgeHealthCheck: async () => true
+        });
+        await svc.getConnectionHealth();
+        size = 20;
+        const result = await svc.getConnectionHealth();
+        assert.equal(result.controlPlaneAlive, true);
+        assert.equal(result.nonFatalEvidence.includes('control-plane-stale-but-data-plane-active'), false);
+    });
+
+    it('device-evidence-not-configured alone does not make degraded', async () => {
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({ updatedAt: new Date().toISOString() }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 120 }),
+            bridgeHealthCheck: async () => true
+        });
+        await svc.getConnectionHealth();
+        const result = await svc.getConnectionHealth();
+        assert.equal(result.connectionState, 'idle');
+        assert.equal(result.nonFatalEvidence.includes('device-evidence-not-configured'), true);
     });
 
     it('target traffic evidence keeps non-disconnected state', async () => {
@@ -170,6 +218,7 @@ describe('connection health service', () => {
         await svc.getConnectionHealth();
         const result = await svc.getConnectionHealth();
         assert.notEqual(result.connectionState, 'active');
+        assert.notEqual(result.connectionState, 'degraded');
         assert.equal(result.nonFatalEvidence.includes('generic-vpn-evidence-not-htk-specific'), true);
     });
 
@@ -312,7 +361,9 @@ describe('connection health service', () => {
             bridgeHealthCheck: async () => false
         });
         const result = await svc.getConnectionHealth();
-        assert.ok(['stale', 'degraded', 'unknown'].includes(result.connectionState));
+        assert.equal(result.connectionState, 'stale');
+        assert.equal(result.automationHealthStale, true);
+        assert.equal(result.staleReason, 'automation-health-stale');
         assert.notEqual(result.connectionState, 'disconnected');
         delete process.env.LAB_ADDON_CONNECTION_HEALTH_DISCONNECTED_MS;
     });
