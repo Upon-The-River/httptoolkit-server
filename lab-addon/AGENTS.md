@@ -99,3 +99,11 @@ When changing connection-state logic, add/modify tests for:
 - `/automation/health` evaluation must parse body flags/capabilities; HTTP 200 alone is insufficient when body indicates disabled/degraded/capability false.
 - `start-headless` request supports `trafficWaitTimeoutMs`, `trafficWaitPollMs`, `targetTrafficWaitTimeoutMs`, `targetTrafficWaitPollMs`.
 - `/session/target-signal` is self-session evidence only; in official-bridge mode it can be unavailable and watchdogs should prefer `/automation/connection-health`, `/export/output-status`, and ingest-derived evidence.
+
+## 6. Connection-health naming clarifications
+
+- `idle` is the normal no-traffic state when control-plane is alive but no recent data-plane/target evidence exists.
+- `stale` is reserved for explicit stale evidence, such as stale automation snapshots (`automation-health-stale`).
+- `degraded` is for non-fatal anomalies, including `automation-health-stale-but-data-plane-active`.
+- Do not use `control-plane-stale-but-data-plane-active` for automation snapshot staleness.
+- Watchdog interpretation: `disconnected` means confirmed disconnect, `endpoint_error` means addon unreachable, `idle` means no recent traffic, and `degraded + automation-health-stale-but-data-plane-active` means capture is still active while automation snapshots are stale.

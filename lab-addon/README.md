@@ -510,3 +510,25 @@ Compatibility notes & current limitations:
 - `POST /automation/android-adb/start-headless` supports optional wait tuning fields: `trafficWaitTimeoutMs`, `trafficWaitPollMs`, `targetTrafficWaitTimeoutMs`, `targetTrafficWaitPollMs`.
 - `POST /session/target-signal` reflects addon self-session pass-through evidence. In official-bridge mode it may return unavailable; watchdogs should rely on `/automation/connection-health` and `/export/output-status`.
 - For mixed official-bridge/self-session history, `target-signal` availability is determined by the latest parseable `observedAt` session evidence; stale official-bridge evidence must not mask newer addon self-session evidence.
+
+### Connection-health state interpretation (watchdog guidance)
+
+- `idle`: normal no-traffic state. Control-plane is alive, but no recent data-plane/target traffic evidence.
+- `stale`: explicit stale evidence only (for example stale automation snapshots via `automation-health-stale`).
+- `degraded`: non-fatal anomalies, including stale automation snapshots while data-plane remains active (`automation-health-stale-but-data-plane-active`).
+- `disconnected`: only strong sustained failure evidence.
+
+Connection-health payload now also includes:
+
+- `automationHealthStale`
+- `automationHealthUpdatedAt`
+- `lastSuccessfulStartObservedAt`
+- `dataPlaneRecent`
+- `targetTrafficRecent`
+
+PowerShell watch output should include at least:
+
+- `staleReason`
+- `automationHealthStale`
+- `lastDataPlaneObservedAt`
+- `lastTargetTrafficObservedAt`

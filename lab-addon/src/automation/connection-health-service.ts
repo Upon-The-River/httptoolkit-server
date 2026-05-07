@@ -31,6 +31,11 @@ export interface ConnectionHealthSnapshot {
     nonFatalEvidence: string[];
     warnings: string[];
     staleReason: string | null;
+    automationHealthStale: boolean;
+    automationHealthUpdatedAt: string | null;
+    lastSuccessfulStartObservedAt: string | null;
+    dataPlaneRecent: boolean;
+    targetTrafficRecent: boolean;
 }
 
 interface Thresholds { dataPlaneRecentMs:number; controlPlaneStaleMs:number; deviceStaleMs:number; disconnectedMs:number; bridgeTimeoutMs:number; mobileEvidenceRecentMs:number }
@@ -114,16 +119,13 @@ export class ConnectionHealthService {
         if (!this.deps.getDeviceLikelyConnected) nonFatalEvidence.push('device-evidence-not-configured');
         if (deviceLikelyConnected) this.lastDeviceEvidenceAt = observedAt;
 
-        const targetRecent = this.lastTargetTrafficObservedAt && (now.getTime() - Date.parse(this.lastTargetTrafficObservedAt) <= this.t.dataPlaneRecentMs);
-        const dataPlaneRecent = this.lastDataPlaneObservedAt && (now.getTime() - Date.parse(this.lastDataPlaneObservedAt) <= this.t.dataPlaneRecentMs);
+        const targetRecent = Boolean(this.lastTargetTrafficObservedAt && (now.getTime() - Date.parse(this.lastTargetTrafficObservedAt) <= this.t.dataPlaneRecentMs));
+        const dataPlaneRecent = Boolean(this.lastDataPlaneObservedAt && (now.getTime() - Date.parse(this.lastDataPlaneObservedAt) <= this.t.dataPlaneRecentMs));
 
-        const updatedAtTs = Date.parse(automation.updatedAt ?? new Date(0).toISOString());
-        const staleControlPlane = Number.isFinite(updatedAtTs) ? (now.getTime() - updatedAtTs > this.t.controlPlaneStaleMs) : true;
+        const updatedAtRaw = typeof automation.updatedAt === 'string' ? automation.updatedAt : null;
+        const updatedAtTs = updatedAtRaw ? Date.parse(updatedAtRaw) : NaN;
+        const automationHealthStale = !Number.isFinite(updatedAtTs) || (now.getTime() - updatedAtTs > this.t.controlPlaneStaleMs);
         let staleReason: string | null = null;
-
-        if (staleControlPlane && (Boolean(dataPlaneRecent) || Boolean(targetRecent))) {
-            nonFatalEvidence.push('control-plane-stale-but-data-plane-active');
-        }
 
         if (controlPlaneAlive === false) nonFatalEvidence.push('bridge-unreachable');
         if (deviceLikelyConnected === false) {
@@ -149,6 +151,11 @@ export class ConnectionHealthService {
                 && (automation.lastRecoverHeadless as { safeStub?: unknown })?.safeStub !== true
                 && (automation.lastRecoverHeadless as { implemented?: unknown })?.implemented !== false) ? recoverTs : Number.NEGATIVE_INFINITY
         );
+
+
+        const lastSuccessfulStartObservedAt = Number.isFinite(successfulStartTs)
+            ? new Date(successfulStartTs).toISOString()
+            : null;
 
         if (automation.lastStopHeadless) {
             if (stopTs === null) {
@@ -212,18 +219,31 @@ export class ConnectionHealthService {
             ? (now.getTime() - Date.parse(this.firstStrongFailureObservedAt) > this.t.disconnectedMs)
             : false;
 
+        const hasActivePositiveEvidence = positiveGrowth || targetRecent || dataPlaneRecent || this.lastActiveProbeOk === true || mobileCaptureRecent;
+
+        if (automationHealthStale && hasActivePositiveEvidence) {
+            nonFatalEvidence.push('automation-health-stale-but-data-plane-active');
+        }
+
         let state: ConnectionState = 'unknown';
         if (hasStrongFailure && enoughTime) {
             state = 'disconnected';
-        } else if (positiveGrowth || targetRecent || dataPlaneRecent || this.lastActiveProbeOk === true || mobileCaptureRecent) {
-            state = staleControlPlane && (positiveGrowth || targetRecent || dataPlaneRecent) ? 'degraded' : 'active';
-        } else if (!staleControlPlane && (controlPlaneAlive !== false) && (deviceLikelyConnected !== false) && this.lastActiveProbeOk !== false) {
+        } else if (hasActivePositiveEvidence) {
+            if (automationHealthStale) {
+                state = 'degraded';
+                staleReason = 'automation-health-stale';
+            } else {
+                state = 'active';
+            }
+        } else if (controlPlaneAlive === true && deviceLikelyConnected !== false && !hasStrongFailure) {
             state = 'idle';
-        } else if (staleControlPlane && !hasStrongFailure) {
-            state = controlPlaneAlive === false ? 'degraded' : 'stale';
-            staleReason = 'control-plane-stale';
-        } else if (!hasStrongFailure) {
-            state = 'unknown';
+            if (automationHealthStale) {
+                state = 'stale';
+                staleReason = 'automation-health-stale';
+            }
+        } else if (!hasStrongFailure && (automationHealthStale || nonFatalEvidence.some((e) => e === 'bridge-unreachable' || e === 'device-offline'))) {
+            state = automationHealthStale ? 'stale' : 'degraded';
+            staleReason = automationHealthStale ? 'automation-health-stale' : (nonFatalEvidence.includes('bridge-unreachable') ? 'bridge-unreachable' : 'device-offline');
         }
 
         const passiveDataPlaneObserved = positiveGrowth;
@@ -243,7 +263,7 @@ export class ConnectionHealthService {
             deviceLikelyConnected,
             passiveDataPlaneObserved,
             dataPlaneIdle,
-            targetTrafficAlive: Boolean(targetRecent),
+            targetTrafficAlive: targetRecent,
             activeProbeSupported: false,
             lastActiveProbeAt: this.lastActiveProbeAt,
             lastActiveProbeOk: this.lastActiveProbeOk,
@@ -259,7 +279,12 @@ export class ConnectionHealthService {
             disconnectEvidence: state === 'disconnected' ? disconnectEvidence : [],
             nonFatalEvidence,
             warnings,
-            staleReason
+            staleReason,
+            automationHealthStale,
+            automationHealthUpdatedAt: updatedAtRaw,
+            lastSuccessfulStartObservedAt,
+            dataPlaneRecent,
+            targetTrafficRecent: targetRecent
         };
     }
 }
