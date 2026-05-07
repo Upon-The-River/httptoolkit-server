@@ -51,19 +51,38 @@ describe('connection health service', () => {
         assert.notEqual(result.connectionState, 'disconnected');
     });
 
-    it('automation health stale without data-plane is stale', async () => {
+    it('automation health stale alone with healthy control-plane remains idle', async () => {
         const svc = new ConnectionHealthService({
             getAutomationHealth: () => ({ updatedAt: new Date(0).toISOString() }),
-            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 })
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 }),
+            bridgeHealthCheck: async () => true,
+            getDeviceLikelyConnected: async () => true
         });
         const result = await svc.getConnectionHealth();
-        assert.equal(result.connectionState, 'stale');
+        assert.equal(result.connectionState, 'idle');
         assert.equal(result.automationHealthStale, true);
-        assert.equal(result.staleReason, 'automation-health-stale');
+        assert.deepEqual(result.disconnectEvidence, []);
+        assert.equal(result.idleReason, 'automation-health-stale-no-recent-data-plane');
+        assert.notEqual(result.connectionState, 'stale');
+        assert.notEqual(result.connectionState, 'degraded');
         assert.notEqual(result.connectionState, 'disconnected');
     });
 
 
+
+
+    it('automation health stale plus no configured device remains idle', async () => {
+        const svc = new ConnectionHealthService({
+            getAutomationHealth: () => ({ updatedAt: new Date(0).toISOString() }),
+            getExportOutputStatus: () => ({ jsonlPath: '/tmp/a', exportDir: '/tmp', runtimeRoot: '/tmp', exists: true, sizeBytes: 100 }),
+            bridgeHealthCheck: async () => true
+        });
+        const result = await svc.getConnectionHealth();
+        assert.equal(result.connectionState, 'idle');
+        assert.equal(result.nonFatalEvidence.includes('device-evidence-not-configured'), true);
+        assert.notEqual(result.connectionState, 'stale');
+        assert.notEqual(result.connectionState, 'degraded');
+    });
 
     it('no recent traffic with healthy control-plane is idle, not stale', async () => {
         const svc = new ConnectionHealthService({
@@ -274,7 +293,7 @@ describe('connection health service', () => {
         const result = await svc.getConnectionHealth();
         assert.notEqual(result.connectionState, 'active');
         assert.notEqual(result.connectionState, 'disconnected');
-        assert.ok(['idle', 'degraded', 'unknown'].includes(result.connectionState));
+        assert.ok(['idle', 'unknown'].includes(result.connectionState));
     });
 
     it('treats unparseable stop evidence as non-fatal', async () => {

@@ -486,7 +486,7 @@ Compatibility notes & current limitations:
 - JSONL 增长、target traffic 观测到、`/export/ingest` 成功 `persisted=true` 都是 data-plane 活跃强证据。
 - JSONL 不增长不是断线证据：设备静止、App 未发请求、未命中 target 时都可能正常不增长。
 - 当 data-plane/target traffic 仍有活跃证据时，不应显示 `disconnected`，应显示 `active` 或 `degraded`。
-- control-plane stale 但 data-plane active 时，应显示 `degraded` 或 `active`，并给出 `control-plane-stale-but-data-plane-active` warning/non-fatal evidence。
+- automation snapshot stale 但 data-plane active 时，应显示 `degraded`（或按现有规则维持 `active`），nonFatalEvidence 使用 `automation-health-stale-but-data-plane-active`。
 - 无流量但 control-plane/device evidence 正常时，应显示 `idle`，不是 `disconnected`。
 - `bridge-unreachable` 属于 control-plane degraded / nonFatalEvidence，不能单独触发 `disconnected`。
 - `disconnected` 只应由真正强失败证据并持续超过阈值触发，例如：`device-offline`、`active-probe-failed`、session registry 明确 `stopped` 且没有更新的 successful start、proxy/data-plane 主动探测明确失败、多个关键证据同时失败。
@@ -513,10 +513,11 @@ Compatibility notes & current limitations:
 
 ### Connection-health state interpretation (watchdog guidance)
 
-- `idle`: normal no-traffic state. Control-plane is alive, but no recent data-plane/target traffic evidence.
-- `stale`: explicit stale evidence only (for example stale automation snapshots via `automation-health-stale`).
+- `idle`: normal no-traffic state. `controlPlaneAlive=true` 且无断线证据时，即使 `automationHealthStale=true` 也保持 `idle`。
+- `stale`: only when staleness impacts confidence (e.g. control-plane unavailable/uncertain plus stale automation snapshot), not for stale snapshot alone.
 - `degraded`: non-fatal anomalies, including stale automation snapshots while data-plane remains active (`automation-health-stale-but-data-plane-active`).
 - `disconnected`: only strong sustained failure evidence.
+- Watchdog recommendation: treat only `disconnected` and `endpoint_error` as strong disconnect signals; do not treat `staleReason=automation-health-stale` as direct disconnect.
 
 Connection-health payload now also includes:
 
@@ -525,6 +526,7 @@ Connection-health payload now also includes:
 - `lastSuccessfulStartObservedAt`
 - `dataPlaneRecent`
 - `targetTrafficRecent`
+- `idleReason` (`no-recent-data-plane` / `automation-health-stale-no-recent-data-plane`)
 
 PowerShell watch output should include at least:
 
