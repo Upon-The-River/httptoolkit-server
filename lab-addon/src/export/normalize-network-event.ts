@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { routeQidianEndpoint } from './qidian-endpoint-router';
+import { resolveRecordProofTimestamp } from './proof-timestamp';
 
 export interface RawCapturedRecord {
     schemaVersion?: number;
@@ -68,10 +69,12 @@ export function normalizeNetworkEvent(record: RawCapturedRecord, includeSamples 
     const observedAtWallClockInvalid = typeof record.observedAtWallClockInvalid === 'boolean'
         ? record.observedAtWallClockInvalid
         : !isValidWallClockDate(observedAt);
-    const eventTimeForSorting = record.ingestedAt
-        ?? record.capturedAt
-        ?? (isValidWallClockDate(observedAt) ? observedAt : undefined)
-        ?? new Date(0).toISOString();
+    const proofTimestamp = resolveRecordProofTimestamp(record as unknown as Record<string, unknown>);
+    const eventTimeForSorting = proofTimestamp.epochMs !== null
+        ? new Date(proofTimestamp.epochMs).toISOString()
+        : (record.capturedAt
+            ?? (isValidWallClockDate(observedAt) ? observedAt : undefined)
+            ?? new Date(0).toISOString());
     const url = record.url ?? '';
     const routed = routeQidianEndpoint(url);
     const bodyInline = typeof record.body?.inline === 'string' ? record.body.inline : undefined;
@@ -118,6 +121,8 @@ export function normalizeNetworkEvent(record: RawCapturedRecord, includeSamples 
         sourceObservedAt: record.sourceObservedAt,
         observedAtWallClockInvalid,
         eventTimeForSorting,
+        proofTimestampSource: proofTimestamp.source,
+        proofTimestampMs: proofTimestamp.epochMs,
         method,
         url,
         host: routed.host,
