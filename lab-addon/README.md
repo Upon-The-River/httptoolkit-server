@@ -113,6 +113,15 @@ Connection-health mobile evidence rule:
 - `active` state requires fresh HTTP Toolkit-specific mobile evidence (for example `dumpsysVpnMentionsHttpToolkit`, `activityMentionsHttpToolkit`, `proxyVpnRunnableSeen`) or independent data-plane/target/probe evidence.
 - Generic VPN evidence alone does not prove HTTP Toolkit capture is active.
 
+Connection-health stale/idle interpretation:
+
+- `automationHealthStale=true` means automation start/stop/recover snapshots are old; it does **not** mean disconnect by itself.
+- Long periods that only poll `GET /automation/connection-health` (without fresh start/stop/recover calls) can naturally produce `automationHealthStale=true`.
+- When `controlPlaneAlive=true` and there is no disconnect evidence, automation staleness alone keeps state at `idle` (with `idleReason=automation-health-stale-no-recent-data-plane`), not `stale`.
+- `watchdog` consumers should not treat `state=stale` + `staleReason=automation-health-stale` as a hard disconnect signal.
+- Prefer strong disconnect triggers only: `disconnected` state or `endpoint_error`.
+
+
 Proxy bootstrap validation check (PowerShell):
 
 ```powershell
